@@ -1,2 +1,2 @@
-# akadem_yordam_bot
+# akadem_yordamchi_bot
 elegram bot for academic document generation
