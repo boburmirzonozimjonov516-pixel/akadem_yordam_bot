@@ -9,17 +9,19 @@ from dotenv import load_dotenv
 from datetime import datetime
 from io import BytesIO
 
-# File generation
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
 from reportlab.lib import colors
 from reportlab.lib.units import cm
+
 from docx import Document as DocxDocument
-from docx.shared import Pt, Inches
+from docx.shared import Pt, RGBColor, Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+
 from pptx import Presentation
-from pptx.util import Inches as PptxInches, Pt as PptxPt, Emu
-from pptx.dml.color import RGBColor as PptxRGB
+from pptx.util import Inches as Inch, Pt as PPt, Emu
+from pptx.dml.color import RGBColor as PRGB
 from pptx.enum.text import PP_ALIGN
 
 load_dotenv()
@@ -30,194 +32,389 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 user_data_store = {}
 
-# ==================== AI CONTENT GENERATION ====================
+# ===================== AI CONTENT =====================
 
-async def generate_ai_content(topic, doc_type, style, slide_count=8):
-    """Generate content using Gemini AI"""
-    
+async def generate_with_gemini(prompt):
     if not GEMINI_API_KEY:
-        # Fallback: generate simple content without AI
-        return generate_simple_content(topic, doc_type, style, slide_count)
-    
-    if doc_type == "slide":
-        prompt = f"""
-        "{topic}" mavzusida {slide_count} ta slayd uchun prezentatsiya mazmunini yoz.
-        Uslub: {style}
-        
-        Har bir slayd uchun:
-        SLAYD_1: [Sarlavha]
-        MAZMUN_1: [2-3 qator matn]
-        
-        FAQAT O'ZBEKCHA yoz. JSON emas, oddiy matn.
-        """
-    else:
-        doc_names = {
-            "referat": "Referat",
-            "kurs": "Kurs ishi",
-            "maqola": "Ilmiy maqola"
-        }
-        prompt = f"""
-        "{topic}" mavzusida {doc_names.get(doc_type, 'hujjat')} yoz.
-        Uslub: {style}
-        Hajm: 500-800 so'z
-        
-        Tuzilma:
-        1. Kirish
-        2. Asosiy qism (3-4 bo'lim)
-        3. Xulosa
-        
-        FAQAT O'ZBEKCHA yoz.
-        """
-    
+        return None
     try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
-        
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}]
-        }
-        
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        payload = {"contents": [{"parts": [{"text": prompt}]}]}
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=45)) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     return data["candidates"][0]["content"]["parts"][0]["text"]
-                else:
-                    return generate_simple_content(topic, doc_type, style, slide_count)
     except:
-        return generate_simple_content(topic, doc_type, style, slide_count)
+        pass
+    return None
 
+async def generate_slide_content(topic, slide_count, style):
+    prompt = f""""{topic}" mavzusida {slide_count} ta slayd uchun O'ZBEK TILIDA prezentatsiya yarat.
 
-def generate_simple_content(topic, doc_type, style, slide_count=8):
-    """Generate content without AI (fallback)"""
+Qat'iy format:
+===SLAYD_1===
+SARLAVHA: {topic}
+MAZMUN: Kirish so'zi - bu prezentatsiya haqida 2-3 jumlada
+
+===SLAYD_2===
+SARLAVHA: Mavzuga kirish
+MAZMUN: {topic} nima ekanligini 3-4 jumlada tushuntir
+
+===SLAYD_3===
+SARLAVHA: Tarixiy background
+MAZMUN: {topic} ning kelib chiqishi va tarixi haqida 3-4 jumla
+
+===SLAYD_4===
+SARLAVHA: Asosiy xususiyatlar
+MAZMUN: {topic} ning 4-5 ta muhim xususiyatlarini sanab o't
+
+===SLAYD_5===
+SARLAVHA: Afzalliklari
+MAZMUN: {topic} ning 4-5 ta asosiy afzalliklarini yoz
+
+===SLAYD_6===
+SARLAVHA: Kamchiliklari va muammolar
+MAZMUN: {topic} sohasidagi 3-4 ta asosiy muammo va kamchiliklar
+
+===SLAYD_7===
+SARLAVHA: Dunyo tajribasi
+MAZMUN: Dunyoda {topic} qanday qo'llanilayotgani haqida 3-4 jumla
+
+===SLAYD_8===
+SARLAVHA: O'zbekistonda holati
+MAZMUN: O'zbekistonda {topic} ning rivojlanishi haqida 3-4 jumla
+
+===SLAYD_9===
+SARLAVHA: Kelajak istiqbollari
+MAZMUN: {topic} ning kelajakdagi rivojlanishi haqida 3-4 jumla
+
+===SLAYD_10===
+SARLAVHA: Xulosa
+MAZMUN: {topic} mavzusi bo'yicha 3-4 jumlali yakuniy xulosa
+
+Uslub: {style}
+FAQAT O'ZBEKCHA yoz. Har bir slayd uchun mazmunli va batafsil ma'lumot ber."""
+
+    result = await generate_with_gemini(prompt)
+    if result:
+        return result
+    return generate_fallback_slides(topic, slide_count)
+
+def generate_fallback_slides(topic, slide_count):
+    """Rich fallback content"""
+    templates = [
+        f"===SLAYD_1===\nSARLAVHA: {topic}\nMAZMUN: Ushbu prezentatsiya {topic} mavzusiga bag'ishlangan bo'lib, uning asosiy jihatlari, afzalliklari va kelajak istiqbollari ko'rib chiqiladi.",
+        f"===SLAYD_2===\nSARLAVHA: {topic} haqida\nMAZMUN: {topic} - bu zamonaviy dunyoda muhim o'rin egallaydi. U turli sohalarda keng qo'llaniladi va insonlar hayotiga sezilarli ta'sir ko'rsatadi. Uni o'rganish va tushunish bugungi kunda zaruriy ehtiyojga aylangan.",
+        f"===SLAYD_3===\nSARLAVHA: Rivojlanish tarixi\nMAZMUN: {topic} ning rivojlanish tarixi ko'p asrlarga borib taqaladi. Dastlabki bosqichda sodda ko'rinishda bo'lgan ushbu soha vaqt o'tishi bilan murakkab va mukammal tizimga aylandi. Har bir davr o'zining muhim hissasini qo'shdi.",
+        f"===SLAYD_4===\nSARLAVHA: Asosiy xususiyatlar\nMAZMUN: {topic} ning asosiy xususiyatlari: 1) Yuqori samaradorlik va unumdorlik; 2) Keng qo'llanilish imkoniyatlari; 3) Doimiy rivojlanish va takomillashuv; 4) Iqtisodiy jihatdan foydaliligi; 5) Ekologik ta'siri va barqarorligi.",
+        f"===SLAYD_5===\nSARLAVHA: Afzalliklari\nMAZMUN: {topic} ning afzalliklari: 1) Ish unumdorligini oshiradi; 2) Vaqt va resurslarni tejaydi; 3) Yangi imkoniyatlar yaratadi; 4) Xalqaro raqobatbardoshlikni ta'minlaydi; 5) Innovatsiyalar uchun zamin hozirlaydi.",
+        f"===SLAYD_6===\nSARLAVHA: Muammolar va yechimlar\nMAZMUN: {topic} sohasida bir qator muammolar mavjud: malakali kadrlar yetishmasligi, moliyalashtirish muammolari va texnik cheklovlar. Bularni hal qilish uchun davlat dasturlari, xususiy investitsiyalar va xalqaro hamkorlik yo'lga qo'yilmoqda.",
+        f"===SLAYD_7===\nSARLAVHA: Jahon tajribasi\nMAZMUN: Dunyoning yetakchi mamlakatlari {topic} sohasida katta yutuqlarga erishgan. Xususan, Germaniya, Yaponiya va AQSh bu sohada ilg'or tajribaga ega. Ularning tajribasini o'rganish va moslashtirib qo'llash muhim ahamiyat kasb etadi.",
+        f"===SLAYD_8===\nSARLAVHA: O'zbekistonda rivojlanish\nMAZMUN: O'zbekistonda {topic} sohasida so'nggi yillarda sezilarli o'zgarishlar yuz berdi. 2022-2026 yillar rivojlanish strategiyasi doirasida bu sohaga alohida e'tibor qaratilmoqda. Yangi loyihalar va dasturlar amalga oshirilmoqda.",
+        f"===SLAYD_9===\nSARLAVHA: Kelajak istiqbollari\nMAZMUN: {topic} sohasining kelajagi juda istiqbolli. Yangi texnologiyalar va innovatsiyalar bu sohani yanada rivojlantiradi. 2030 yilga kelib bu soha yanada kengayib, milliy iqtisodiyotga katta hissa qo'shishi kutilmoqda.",
+        f"===SLAYD_10===\nSARLAVHA: Xulosa\nMAZMUN: {topic} mavzusini o'rganish natijasida ko'pgina muhim xulosalarga kelindi. Bu soha rivojlanishda davom etmoqda va kelajakda yanada muhim o'rin egallaydi. Barcha tomonlar hamkorligida bu sohani yanada rivojlantirish mumkin.",
+    ]
+    return "\n\n".join(templates[:slide_count])
+
+async def generate_doc_content(topic, doc_type, style):
+    doc_names = {"referat": "Referat", "kurs": "Kurs ishi", "maqola": "Ilmiy maqola"}
     
-    if doc_type == "slide":
-        slides = []
-        slides.append(f"SLAYD_1: {topic}")
-        slides.append(f"MAZMUN_1: Ushbu prezentatsiya {topic} mavzusiga bag'ishlangan. Biz bu sohaning asosiy jihatlarini ko'rib chiqamiz.")
-        
-        sections = [
-            ("Kirish", f"{topic} - bu zamonaviy dunyoda muhim ahamiyat kasb etuvchi soha. Uning asosiy xususiyatlari va ahamiyatini tushunish zarur."),
-            ("Asosiy tushunchalar", f"{topic} sohasidagi asosiy tushunchalar va atamalar bilan tanishib chiqamiz. Bu bilimlar keyingi tadqiqotlar uchun asos bo'ladi."),
-            ("Tarixiy rivojlanish", f"{topic} ning rivojlanish tarixi uzoq o'tmishga ega. Har bir davr o'zining muhim kashfiyotlari bilan ajralib turadi."),
-            ("Hozirgi holat", f"Hozirgi kunda {topic} sohasida katta yutuqlarga erishilgan. Yangi texnologiyalar va yondashuvlar faol qo'llanilmoqda."),
-            ("Muammolar va yechimlar", f"{topic} sohasida bir qator muammolar mavjud. Bular yechish yo'llari faol izlanmoqda va yangi yondashuvlar taklif etilmoqda."),
-            ("Kelajak istiqbollari", f"{topic} ning kelajagi juda istiqbolli. Yangi tadqiqotlar va innovatsiyalar bu sohani yanada rivojlantiradi."),
-            ("Xulosa", f"{topic} mavzusini o'rganish natijasida ko'pgina muhim xulosalarga keldik. Bu bilimlar amaliyotda keng qo'llanilishi mumkin."),
-        ]
-        
-        for i, (title, content) in enumerate(sections[:slide_count-1], 2):
-            slides.append(f"SLAYD_{i}: {title}")
-            slides.append(f"MAZMUN_{i}: {content}")
-        
-        return "\n".join(slides)
-    
-    else:
-        return f"""KIRISH
+    prompt = f""""{topic}" mavzusida {doc_names.get(doc_type, 'hujjat')} yoz.
+Uslub: {style}
+Hajm: 600-900 so'z
+Til: O'ZBEK TILI
 
-{topic} - bu zamonaviy fanda va amaliyotda katta ahamiyat kasb etuvchi mavzu. Ushbu {doc_type} da biz bu mavzuning asosiy jihatlarini ko'rib chiqamiz va uning mohiyatini tushuntirishga harakat qilamiz.
+Tuzilma:
+KIRISH
+[2-3 paragraf kirish]
 
 ASOSIY QISM
 
-{topic} sohasini o'rganish bir necha sabablarga ko'ra muhimdir. Birinchidan, bu soha hozirgi kunda jadal rivojlanmoqda. Ikkinchidan, uning amaliy ahamiyati nihoyatda katta.
+1. {topic} ning mohiyati
+[3-4 paragraf]
 
-{topic} ning asosiy xususiyatlari quyidagilardan iborat:
-- Bu soha keng qamrovli bilimlarni o'z ichiga oladi
-- Amaliy tatbiq etish imkoniyatlari kengdir  
-- Zamonaviy texnologiyalar bilan uzviy bog'liqdir
+2. Asosiy muammolar va yechimlar
+[3-4 paragraf]
 
-Tadqiqotlar shuni ko'rsatadiki, {topic} bo'yicha bilimlar hayotning turli sohalarida qo'llanilishi mumkin. Bu esa uni o'rganishni yanada muhim qiladi.
+3. Amaliy ahamiyati
+[3-4 paragraf]
+
+XULOSA
+[2-3 paragraf xulosa]
+
+ADABIYOTLAR RO'YXATI
+1. ...
+2. ...
+3. ...
+
+FAQAT O'ZBEKCHA yoz. Akademik uslubda yoz."""
+
+    result = await generate_with_gemini(prompt)
+    if result:
+        return result
+    return f"""KIRISH
+
+{topic} mavzusi zamonaviy fan va amaliyotda muhim o'rin egallaydi. Ushbu {doc_names.get(doc_type, 'hujjat')}da biz bu mavzuning asosiy jihatlarini, uning ahamiyatini va kelajak istiqbollarini ko'rib chiqamiz.
+
+Mavzuning dolzarbligi shundaki, bugungi kunda {topic} sohasida jadal o'zgarishlar yuz bermoqda. Bu o'zgarishlar nafaqat ilm-fan, balki amaliy hayotda ham o'z aksini topmoqda.
+
+ASOSIY QISM
+
+1. {topic} NING MOHIYATI
+
+{topic} - bu ko'p qirrali va murakkab hodisa bo'lib, u bir necha asrlar davomida rivojlanib kelmoqda. Uning mohiyatini to'liq tushunish uchun tarixiy, nazariy va amaliy jihatlarini o'rganish zarur.
+
+Tadqiqotlar shuni ko'rsatadiki, {topic} ning asosiy xususiyatlari uning keng qo'llanilish imkoniyatlarini belgilaydi. Turli sohalardagi mutaxassislar bu mavzuga o'ziga xos yondashadilar va har biri muayyan jihatlarini o'rganishga e'tibor qaratadi.
+
+2. ASOSIY MUAMMOLAR VA YECHIMLAR
+
+{topic} sohasida bir qator muammolar mavjud bo'lib, ularni hal qilish dolzarb masala hisoblanadi. Birinchi navbatda, kadrlar tayyorlash muammosi ko'zga tashlanadi.
+
+Bundan tashqari, moliyaviy va texnik resurslar etishmovchiligi ham sezilarli to'siq bo'lib qolmoqda. Biroq, bu muammolarni hal qilishning aniq yo'llari mavjud va ular muvaffaqiyatli amalga oshirilmoqda.
+
+3. AMALIY AHAMIYATI
+
+{topic} ning amaliy ahamiyati nihoyatda katta. U iqtisodiy rivojlanishga, ijtimoiy farovonlikka va ilmiy taraqqiyotga bevosita hissa qo'shadi.
+
+O'zbekistonda bu soha bo'yicha amalga oshirilayotgan islohotlar ijobiy natijalar bermoqda. Yangi loyihalar va dasturlar samarali ishlamoqda.
 
 XULOSA
 
-{topic} mavzusini o'rganish natijasida shunday xulosaga kelish mumkin: bu soha kelajakda yanada rivojlanib, insoniyat hayotiga ijobiy ta'sir ko'rsatadi. Shu sababli, bu mavzuni chuqur o'rganish va tadqiq etish zarurdir.
+{topic} mavzusini o'rganish jarayonida quyidagi xulosalarga kelindi: bu soha rivojlanish sur'atlari jadallashmoqda, amaliy natijalari sezilarli bo'lyapti va kelajak istiqbollari juda yorqin.
 
-Sana: {datetime.now().strftime('%d.%m.%Y')}
-Uslub: {style}
-"""
+Ushbu {doc_names.get(doc_type, 'hujjat')} natijalarini amaliyotga tadbiq etish va keyingi tadqiqotlar uchun poydevor bo'lishi mumkin.
 
+ADABIYOTLAR RO'YXATI
+1. O'zbekiston Respublikasi Prezidentining farmonlari to'plami, 2023.
+2. Karimov I.A. O'zbekiston XXI asrga intilmoqda. T.: O'zbekiston, 2019.
+3. Mirziyoyev Sh.M. Yangi O'zbekiston strategiyasi. T.: O'zbekiston, 2021.
+4. {topic} bo'yicha xalqaro tadqiqotlar to'plami. 2022.
+5. O'zbekiston milliy ensiklopediyasi. T.: 2020.
 
-# ==================== FILE GENERATORS ====================
+Sana: {datetime.now().strftime('%d.%m.%Y')}"""
+
+# ===================== FILE CREATORS =====================
+
+def parse_slides(content, topic, slide_count):
+    slides = []
+    parts = content.split("===SLAYD_")
+    
+    for part in parts[1:]:
+        lines = part.strip().split("\n")
+        title = ""
+        text = ""
+        for line in lines:
+            if line.startswith("SARLAVHA:"):
+                title = line.replace("SARLAVHA:", "").strip()
+            elif line.startswith("MAZMUN:"):
+                text = line.replace("MAZMUN:", "").strip()
+        if title:
+            slides.append((title, text))
+    
+    if not slides:
+        slides = [(topic, content[:300])]
+    
+    return slides[:slide_count]
+
+# 10 professional color themes
+THEMES = [
+    {"bg": (15, 32, 65), "accent": (52, 152, 219), "title": (255,255,255), "text": (220,230,240)},
+    {"bg": (10, 54, 34), "accent": (39, 174, 96), "title": (255,255,255), "text": (210,240,220)},
+    {"bg": (50, 10, 80), "accent": (155, 89, 182), "title": (255,255,255), "text": (230,210,245)},
+    {"bg": (80, 20, 10), "accent": (231, 76, 60), "title": (255,255,255), "text": (245,215,210)},
+    {"bg": (10, 55, 75), "accent": (26, 188, 156), "title": (255,255,255), "text": (200,240,235)},
+    {"bg": (30, 30, 30), "accent": (241, 196, 15), "title": (255,255,255), "text": (240,230,180)},
+    {"bg": (20, 40, 80), "accent": (52, 73, 94), "title": (255,215,0), "text": (220,220,220)},
+    {"bg": (60, 10, 40), "accent": (192, 57, 43), "title": (255,255,255), "text": (245,200,215)},
+    {"bg": (5, 45, 65), "accent": (41, 128, 185), "title": (255,215,0), "text": (200,235,255)},
+    {"bg": (25, 55, 25), "accent": (46, 204, 113), "title": (255,255,255), "text": (205,245,220)},
+]
+
+def create_pptx(title, content, style, slide_count, theme_idx=0):
+    prs = Presentation()
+    prs.slide_width = Inch(13.33)
+    prs.slide_height = Inch(7.5)
+    
+    slides_data = parse_slides(content, title, slide_count)
+    theme = THEMES[theme_idx % len(THEMES)]
+    
+    for i, (slide_title, slide_text) in enumerate(slides_data):
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        
+        # Background
+        bg = slide.background.fill
+        bg.solid()
+        bg.fore_color.rgb = PRGB(*theme["bg"])
+        
+        # Accent bar (left side)
+        bar = slide.shapes.add_shape(1, Inch(0), Inch(0), Inch(0.15), Inch(7.5))
+        bar.fill.solid()
+        bar.fill.fore_color.rgb = PRGB(*theme["accent"])
+        bar.line.fill.background()
+        
+        if i == 0:
+            # TITLE SLIDE
+            # Bottom accent bar
+            bot = slide.shapes.add_shape(1, Inch(0), Inch(6.8), Inch(13.33), Inch(0.7))
+            bot.fill.solid()
+            bot.fill.fore_color.rgb = PRGB(*theme["accent"])
+            bot.line.fill.background()
+            
+            # Main title
+            tb = slide.shapes.add_textbox(Inch(0.5), Inch(2), Inch(12.5), Inch(2.5))
+            tf = tb.text_frame
+            tf.word_wrap = True
+            p = tf.paragraphs[0]
+            p.text = slide_title
+            p.font.size = PPt(48)
+            p.font.bold = True
+            p.font.color.rgb = PRGB(*theme["title"])
+            p.alignment = PP_ALIGN.CENTER
+            
+            # Subtitle
+            sb = slide.shapes.add_textbox(Inch(0.5), Inch(5), Inch(12.5), Inch(1))
+            sf = sb.text_frame
+            sp = sf.paragraphs[0]
+            sp.text = f"{style} uslubi  •  {datetime.now().strftime('%d.%m.%Y')}"
+            sp.font.size = PPt(20)
+            sp.font.color.rgb = PRGB(*theme["accent"])
+            sp.alignment = PP_ALIGN.CENTER
+            
+        else:
+            # CONTENT SLIDE
+            # Top accent line
+            top = slide.shapes.add_shape(1, Inch(0.15), Inch(1.3), Inch(13.18), Emu(40000))
+            top.fill.solid()
+            top.fill.fore_color.rgb = PRGB(*theme["accent"])
+            top.line.fill.background()
+            
+            # Slide number circle bg
+            num_bg = slide.shapes.add_shape(9, Inch(12.3), Inch(6.8), Inch(0.6), Inch(0.6))
+            num_bg.fill.solid()
+            num_bg.fill.fore_color.rgb = PRGB(*theme["accent"])
+            num_bg.line.fill.background()
+            
+            # Slide number
+            nb = slide.shapes.add_textbox(Inch(12.3), Inch(6.8), Inch(0.6), Inch(0.6))
+            nf = nb.text_frame
+            np_ = nf.paragraphs[0]
+            np_.text = str(i)
+            np_.font.size = PPt(14)
+            np_.font.bold = True
+            np_.font.color.rgb = PRGB(255, 255, 255)
+            np_.alignment = PP_ALIGN.CENTER
+            
+            # Title
+            ttb = slide.shapes.add_textbox(Inch(0.5), Inch(0.3), Inch(12.5), Inch(1))
+            ttf = ttb.text_frame
+            ttp = ttf.paragraphs[0]
+            ttp.text = slide_title
+            ttp.font.size = PPt(30)
+            ttp.font.bold = True
+            ttp.font.color.rgb = PRGB(*theme["title"])
+            
+            # Content
+            ctb = slide.shapes.add_textbox(Inch(0.5), Inch(1.5), Inch(12.5), Inch(5.5))
+            ctf = ctb.text_frame
+            ctf.word_wrap = True
+            
+            # Split content into bullet points
+            sentences = slide_text.replace(";", ".").split(".")
+            first = True
+            for sent in sentences:
+                sent = sent.strip()
+                if not sent or len(sent) < 5:
+                    continue
+                if first:
+                    cp = ctf.paragraphs[0]
+                    first = False
+                else:
+                    cp = ctf.add_paragraph()
+                cp.text = "▸  " + sent
+                cp.font.size = PPt(18)
+                cp.font.color.rgb = PRGB(*theme["text"])
+                cp.space_after = PPt(8)
+    
+    buffer = BytesIO()
+    prs.save(buffer)
+    buffer.seek(0)
+    return buffer
 
 def create_pdf(title, content, style, doc_type):
-    """Create PDF"""
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4,
                            topMargin=2*cm, bottomMargin=2*cm,
                            leftMargin=2.5*cm, rightMargin=2.5*cm)
-    
     story = []
-    styles_obj = getSampleStyleSheet()
+    base = getSampleStyleSheet()
     
-    title_style = ParagraphStyle(
-        'Title', fontSize=18, textColor=colors.HexColor('#1a5276'),
-        spaceAfter=20, alignment=1, fontName='Helvetica-Bold'
-    )
+    t_style = ParagraphStyle('T', fontSize=20, textColor=colors.HexColor('#1a5276'),
+                             spaceAfter=6, alignment=1, fontName='Helvetica-Bold')
+    m_style = ParagraphStyle('M', fontSize=9, textColor=colors.HexColor('#888888'),
+                             spaceAfter=16, alignment=1)
+    h_style = ParagraphStyle('H', fontSize=13, textColor=colors.HexColor('#2874a6'),
+                             spaceAfter=8, spaceBefore=14, fontName='Helvetica-Bold')
+    b_style = ParagraphStyle('B', fontSize=11, spaceAfter=8, leading=18,
+                             alignment=4)
     
-    heading_style = ParagraphStyle(
-        'Heading', fontSize=13, textColor=colors.HexColor('#2874a6'),
-        spaceAfter=10, spaceBefore=15, fontName='Helvetica-Bold'
-    )
-    
-    body_style = ParagraphStyle(
-        'Body', fontSize=11, spaceAfter=8, leading=16,
-        alignment=4, fontName='Helvetica'
-    )
-    
-    meta_style = ParagraphStyle(
-        'Meta', fontSize=9, textColor=colors.HexColor('#888888'),
-        spaceAfter=20, alignment=1
-    )
-    
-    # Title
-    story.append(Paragraph(title, title_style))
-    story.append(Paragraph(
-        f"Tur: {doc_type} | Uslub: {style} | Sana: {datetime.now().strftime('%d.%m.%Y')}",
-        meta_style
-    ))
+    story.append(Paragraph(title, t_style))
+    story.append(Paragraph(f"{doc_type.upper()} | {style} uslubi | {datetime.now().strftime('%d.%m.%Y')}", m_style))
+    story.append(HRFlowable(width="100%", thickness=2, color=colors.HexColor('#2874a6')))
     story.append(Spacer(1, 0.3*cm))
     
-    # Content
     for line in content.split('\n'):
         line = line.strip()
         if not line:
+            story.append(Spacer(1, 0.15*cm))
+        elif line.isupper() and len(line) < 60:
             story.append(Spacer(1, 0.2*cm))
-            continue
-        
-        if line.isupper() and len(line) < 50:
-            story.append(Paragraph(line, heading_style))
+            story.append(Paragraph(line, h_style))
+        elif line[0].isdigit() and '. ' in line[:4]:
+            story.append(Paragraph(f"<b>{line}</b>", h_style))
         else:
-            story.append(Paragraph(line, body_style))
+            story.append(Paragraph(line, b_style))
     
     doc.build(story)
     buffer.seek(0)
     return buffer
 
-
 def create_docx(title, content, style, doc_type):
-    """Create DOCX"""
     doc = DocxDocument()
     
     # Title
-    title_para = doc.add_heading(title, 0)
-    title_para.alignment = 1
+    t = doc.add_paragraph()
+    t.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r = t.add_run(title)
+    r.font.size = Pt(20)
+    r.font.bold = True
+    r.font.color.rgb = RGBColor(26, 82, 118)
     
-    # Metadata
-    meta = doc.add_paragraph(f"Tur: {doc_type} | Uslub: {style} | Sana: {datetime.now().strftime('%d.%m.%Y')}")
-    meta.alignment = 1
-    meta.runs[0].font.size = Pt(9)
-    meta.runs[0].font.color.rgb = None
+    # Meta
+    m = doc.add_paragraph()
+    m.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    mr = m.add_run(f"{doc_type.upper()} | {style} uslubi | {datetime.now().strftime('%d.%m.%Y')}")
+    mr.font.size = Pt(9)
+    mr.font.color.rgb = RGBColor(130, 130, 130)
     
     doc.add_paragraph()
     
-    # Content
     for line in content.split('\n'):
         line = line.strip()
         if not line:
             doc.add_paragraph()
             continue
-        
-        if line.isupper() and len(line) < 50:
-            doc.add_heading(line, 1)
+        if line.isupper() and len(line) < 60:
+            h = doc.add_paragraph()
+            hr = h.add_run(line)
+            hr.font.size = Pt(13)
+            hr.font.bold = True
+            hr.font.color.rgb = RGBColor(26, 82, 118)
+        elif line[0].isdigit() and '. ' in line[:4]:
+            h = doc.add_paragraph()
+            hr = h.add_run(line)
+            hr.font.size = Pt(12)
+            hr.font.bold = True
         else:
             p = doc.add_paragraph(line)
             p.runs[0].font.size = Pt(11) if p.runs else None
@@ -227,151 +424,15 @@ def create_docx(title, content, style, doc_type):
     buffer.seek(0)
     return buffer
 
-
-def create_pptx(title, content, style, slide_count=8):
-    """Create PPTX from AI content"""
-    prs = Presentation()
-    prs.slide_width = PptxInches(13.33)
-    prs.slide_height = PptxInches(7.5)
-    
-    # Parse slides from content
-    slides_data = []
-    lines = content.split('\n')
-    
-    current_title = ""
-    current_content = ""
-    
-    for line in lines:
-        line = line.strip()
-        if line.startswith("SLAYD_"):
-            if current_title:
-                slides_data.append((current_title, current_content))
-                current_content = ""
-            current_title = line.split(":", 1)[1].strip() if ":" in line else line
-        elif line.startswith("MAZMUN_"):
-            current_content = line.split(":", 1)[1].strip() if ":" in line else line
-    
-    if current_title:
-        slides_data.append((current_title, current_content))
-    
-    # If no slides parsed, create from plain text
-    if not slides_data:
-        slides_data = [(title, content[:500])]
-    
-    # Color scheme
-    bg_colors = [
-        (26, 82, 118),   # Dark blue
-        (23, 97, 86),    # Dark green
-        (91, 44, 111),   # Dark purple
-        (120, 40, 31),   # Dark red
-        (30, 132, 73),   # Green
-        (21, 67, 96),    # Navy
-        (100, 30, 22),   # Maroon
-        (17, 122, 101),  # Teal
-    ]
-    
-    for i, (slide_title, slide_content) in enumerate(slides_data):
-        slide = prs.slides.add_slide(prs.slide_layouts[6])  # Blank
-        
-        # Background color
-        bg_color = bg_colors[i % len(bg_colors)]
-        background = slide.background
-        fill = background.fill
-        fill.solid()
-        fill.fore_color.rgb = PptxRGB(*bg_color)
-        
-        # Slide number (except first)
-        if i > 0:
-            num_box = slide.shapes.add_textbox(
-                PptxInches(12.5), PptxInches(7.1),
-                PptxInches(0.6), PptxInches(0.3)
-            )
-            num_tf = num_box.text_frame
-            num_tf.text = str(i)
-            num_tf.paragraphs[0].font.size = PptxPt(12)
-            num_tf.paragraphs[0].font.color.rgb = PptxRGB(255, 255, 255)
-            num_tf.paragraphs[0].font.bold = True
-        
-        if i == 0:
-            # Title slide
-            # Main title
-            title_box = slide.shapes.add_textbox(
-                PptxInches(1), PptxInches(2.5),
-                PptxInches(11.33), PptxInches(2)
-            )
-            tf = title_box.text_frame
-            tf.word_wrap = True
-            p = tf.paragraphs[0]
-            p.text = slide_title
-            p.font.size = PptxPt(44)
-            p.font.bold = True
-            p.font.color.rgb = PptxRGB(255, 255, 255)
-            p.alignment = PP_ALIGN.CENTER
-            
-            # Subtitle
-            sub_box = slide.shapes.add_textbox(
-                PptxInches(1), PptxInches(5),
-                PptxInches(11.33), PptxInches(1)
-            )
-            sub_tf = sub_box.text_frame
-            sub_p = sub_tf.paragraphs[0]
-            sub_p.text = f"{style} | {datetime.now().strftime('%d.%m.%Y')}"
-            sub_p.font.size = PptxPt(18)
-            sub_p.font.color.rgb = PptxRGB(200, 200, 200)
-            sub_p.alignment = PP_ALIGN.CENTER
-        else:
-            # Content slide
-            # Title bar
-            title_bar = slide.shapes.add_textbox(
-                PptxInches(0.5), PptxInches(0.3),
-                PptxInches(12.33), PptxInches(1)
-            )
-            title_tf = title_bar.text_frame
-            title_p = title_tf.paragraphs[0]
-            title_p.text = slide_title
-            title_p.font.size = PptxPt(28)
-            title_p.font.bold = True
-            title_p.font.color.rgb = PptxRGB(255, 255, 255)
-            
-            # Divider line (rectangle)
-            line_shape = slide.shapes.add_shape(
-                1,  # Rectangle
-                PptxInches(0.5), PptxInches(1.4),
-                PptxInches(12.33), Emu(50000)
-            )
-            line_shape.fill.solid()
-            line_shape.fill.fore_color.rgb = PptxRGB(255, 255, 255)
-            line_shape.line.fill.background()
-            
-            # Content
-            content_box = slide.shapes.add_textbox(
-                PptxInches(0.5), PptxInches(1.6),
-                PptxInches(12.33), PptxInches(5.5)
-            )
-            content_tf = content_box.text_frame
-            content_tf.word_wrap = True
-            
-            content_p = content_tf.paragraphs[0]
-            content_p.text = slide_content
-            content_p.font.size = PptxPt(20)
-            content_p.font.color.rgb = PptxRGB(240, 240, 240)
-    
-    buffer = BytesIO()
-    prs.save(buffer)
-    buffer.seek(0)
-    return buffer
-
-
-# ==================== BOT HANDLERS ====================
+# ===================== BOT HANDLERS =====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    user_name = update.effective_user.first_name
-    
+    name = update.effective_user.first_name
     if user_id not in user_data_store:
-        user_data_store[user_id] = {"name": user_name, "documents": 0}
+        user_data_store[user_id] = {"name": name, "documents": 0}
     
-    keyboard = [
+    kb = [
         [InlineKeyboardButton("📝 Referat", callback_data="doc_referat"),
          InlineKeyboardButton("📚 Kurs Ishi", callback_data="doc_kurs")],
         [InlineKeyboardButton("📄 Maqola", callback_data="doc_maqola"),
@@ -379,270 +440,221 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📊 Statistika", callback_data="stats"),
          InlineKeyboardButton("❓ Yordam", callback_data="help")]
     ]
-    
     await update.message.reply_text(
-        f"🎓 Assalomu alaykum, *{user_name}*!\n\n"
-        "Siz faqat *mavzuni* yozing — qolganini bot o'zi qiladi:\n\n"
-        "📝 Referat\n📚 Kurs Ishi\n📄 Maqola\n🎯 Slide (PPTX)\n\n"
+        f"🎓 Assalomu alaykum, *{name}*!\n\n"
+        "Faqat *mavzuni* yozing — bot o'zi yozadi:\n\n"
+        "📝 Referat  •  📚 Kurs Ishi\n"
+        "📄 Maqola  •  🎯 Slide (PPTX)\n\n"
         "💡 Birinchi hujjat *TEKIN!*",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        reply_markup=InlineKeyboardMarkup(kb),
         parse_mode=ParseMode.MARKDOWN
     )
 
-async def handle_doc_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    doc_type = query.data.replace("doc_", "")
+async def cb_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    uid = q.from_user.id
+    dtype = q.data.replace("doc_", "")
+    if uid not in user_data_store:
+        user_data_store[uid] = {}
+    user_data_store[uid]["doc_type"] = dtype
     
-    if user_id not in user_data_store:
-        user_data_store[user_id] = {}
-    user_data_store[user_id]["doc_type"] = doc_type
-    
-    doc_names = {"referat": "📝 Referat", "kurs": "📚 Kurs Ishi",
-                 "maqola": "📄 Maqola", "slide": "🎯 Slide"}
-    
-    keyboard = [
-        [InlineKeyboardButton("🎯 APA", callback_data="style_apa"),
-         InlineKeyboardButton("🎯 Harvard", callback_data="style_harvard")],
-        [InlineKeyboardButton("🎯 O'zbek", callback_data="style_uzbek"),
-         InlineKeyboardButton("🎯 Chicago", callback_data="style_chicago")]
+    names = {"referat":"📝 Referat","kurs":"📚 Kurs Ishi","maqola":"📄 Maqola","slide":"🎯 Slide"}
+    kb = [
+        [InlineKeyboardButton("APA", callback_data="style_APA"),
+         InlineKeyboardButton("Harvard", callback_data="style_Harvard")],
+        [InlineKeyboardButton("O'zbek", callback_data="style_Uzbek"),
+         InlineKeyboardButton("Chicago", callback_data="style_Chicago")]
     ]
-    
-    await query.edit_message_text(
-        f"✅ *{doc_names.get(doc_type)}* tanlandi\n\n📋 Uslubni tanlang:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode=ParseMode.MARKDOWN
-    )
+    await q.edit_message_text(f"✅ *{names[dtype]}* tanlandi\n\n📋 Uslubni tanlang:",
+                              reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
-async def handle_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    style = query.data.replace("style_", "")
+async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    uid = q.from_user.id
+    style = q.data.replace("style_", "")
+    if uid not in user_data_store:
+        user_data_store[uid] = {}
+    user_data_store[uid]["style"] = style
+    dtype = user_data_store[uid].get("doc_type", "")
     
-    if user_id not in user_data_store:
-        user_data_store[user_id] = {}
-    user_data_store[user_id]["style"] = style
-    
-    doc_type = user_data_store[user_id].get("doc_type", "")
-    
-    # Slide uchun format tanlash
-    if doc_type == "slide":
-        keyboard = [
-            [InlineKeyboardButton("5 ta slayd", callback_data="slides_5"),
-             InlineKeyboardButton("8 ta slayd", callback_data="slides_8")],
-            [InlineKeyboardButton("10 ta slayd", callback_data="slides_10"),
-             InlineKeyboardButton("15 ta slayd", callback_data="slides_15")]
+    if dtype == "slide":
+        kb = [
+            [InlineKeyboardButton("5 ta", callback_data="slides_5"),
+             InlineKeyboardButton("8 ta", callback_data="slides_8")],
+            [InlineKeyboardButton("10 ta", callback_data="slides_10"),
+             InlineKeyboardButton("15 ta", callback_data="slides_15")]
         ]
-        await query.edit_message_text(
-            "🎯 *Nechta slayd bo'lsin?*",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode=ParseMode.MARKDOWN
-        )
+        await q.edit_message_text("🎯 *Nechta slayd bo'lsin?*",
+                                  reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
     else:
-        keyboard = [
-            [InlineKeyboardButton("📄 PDF", callback_data="format_pdf"),
-             InlineKeyboardButton("📋 DOCX", callback_data="format_docx")]
+        kb = [
+            [InlineKeyboardButton("📄 PDF", callback_data="fmt_pdf"),
+             InlineKeyboardButton("📋 DOCX", callback_data="fmt_docx")]
         ]
-        await query.edit_message_text(
-            "📄 *Format tanlang:*",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode=ParseMode.MARKDOWN
-        )
+        await q.edit_message_text("📄 *Format tanlang:*",
+                                  reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
-async def handle_slide_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    count = int(query.data.replace("slides_", ""))
+async def cb_slides(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    uid = q.from_user.id
+    count = int(q.data.replace("slides_", ""))
+    if uid not in user_data_store:
+        user_data_store[uid] = {}
+    user_data_store[uid]["slide_count"] = count
+    user_data_store[uid]["format"] = "pptx"
     
-    if user_id not in user_data_store:
-        user_data_store[user_id] = {}
-    user_data_store[user_id]["slide_count"] = count
-    user_data_store[user_id]["format"] = "pptx"
+    # Theme selection
+    kb = [
+        [InlineKeyboardButton("🔵 Ko'k", callback_data="theme_0"),
+         InlineKeyboardButton("🟢 Yashil", callback_data="theme_1")],
+        [InlineKeyboardButton("🟣 Binafsha", callback_data="theme_2"),
+         InlineKeyboardButton("🔴 Qizil", callback_data="theme_3")],
+        [InlineKeyboardButton("🩵 Moviy", callback_data="theme_4"),
+         InlineKeyboardButton("🟡 Sariq", callback_data="theme_5")]
+    ]
+    await q.edit_message_text(f"✅ *{count} ta slayd* tanlandi\n\n🎨 *Dizayn rangini tanlang:*",
+                              reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+
+async def cb_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    uid = q.from_user.id
+    theme_idx = int(q.data.replace("theme_", ""))
+    if uid not in user_data_store:
+        user_data_store[uid] = {}
+    user_data_store[uid]["theme"] = theme_idx
     
-    await query.edit_message_text(
-        f"✅ *{count} ta slayd* tanlandi\n\n"
+    await q.edit_message_text(
         "✏️ *Mavzuni yozing:*\n\n"
         "_Misol: \"Sun'iy intellekt va ta'lim\"_",
         parse_mode=ParseMode.MARKDOWN
     )
-    
-    context.user_data[user_id] = {"state": "title"}
+    context.user_data[uid] = {"state": "title"}
 
-async def handle_format(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    file_format = query.data.replace("format_", "")
+async def cb_fmt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    uid = q.from_user.id
+    fmt = q.data.replace("fmt_", "")
+    if uid not in user_data_store:
+        user_data_store[uid] = {}
+    user_data_store[uid]["format"] = fmt
     
-    if user_id not in user_data_store:
-        user_data_store[user_id] = {}
-    user_data_store[user_id]["format"] = file_format
-    
-    await query.edit_message_text(
-        "✏️ *Mavzuni yozing:*\n\n"
-        "_Misol: \"Kimyo texnologiyasi va IT\"_",
+    await q.edit_message_text(
+        "✏️ *Mavzuni yozing:*\n\n_Misol: \"Kimyo va IT\"_",
         parse_mode=ParseMode.MARKDOWN
     )
-    
-    context.user_data[user_id] = {"state": "title"}
+    context.user_data[uid] = {"state": "title"}
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
     text = update.message.text
     
-    if user_id not in context.user_data:
-        context.user_data[user_id] = {}
+    if uid not in context.user_data:
+        context.user_data[uid] = {}
     
-    state = context.user_data[user_id].get("state")
-    
-    if state == "title":
-        user_data_store[user_id]["title"] = text
-        context.user_data[user_id]["state"] = None
+    if context.user_data[uid].get("state") == "title":
+        user_data_store[uid]["title"] = text
+        context.user_data[uid]["state"] = None
         
-        # Start generating immediately!
         await update.message.reply_text(
-            f"✅ Mavzu qabul qilindi: *{text}*\n\n"
-            "⏳ Hujjat tayyorlanmoqda...\n"
-            "_(30-60 sekund kuting)_",
+            f"✅ Mavzu: *{text}*\n\n⏳ Hujjat tayyorlanmoqda...\n_(30-60 sekund)_",
             parse_mode=ParseMode.MARKDOWN
         )
-        
-        # Generate document automatically
-        await auto_generate_document(update, context, user_id)
+        await do_generate(update, context, uid)
     else:
-        # User sent message without selecting type
-        keyboard = [
+        kb = [
             [InlineKeyboardButton("📝 Referat", callback_data="doc_referat"),
-             InlineKeyboardButton("📚 Kurs Ishi", callback_data="doc_kurs")],
-            [InlineKeyboardButton("📄 Maqola", callback_data="doc_maqola"),
              InlineKeyboardButton("🎯 Slide", callback_data="doc_slide")]
         ]
-        await update.message.reply_text(
-            "📋 Avval hujjat turini tanlang:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        await update.message.reply_text("📋 Avval hujjat turini tanlang:",
+                                        reply_markup=InlineKeyboardMarkup(kb))
 
-async def auto_generate_document(update, context, user_id):
-    """Auto generate document with AI"""
+async def do_generate(update, context, uid):
     try:
-        doc_data = user_data_store.get(user_id, {})
-        title = doc_data.get("title", "Mavzu")
-        style = doc_data.get("style", "uzbek").upper()
-        doc_type = doc_data.get("doc_type", "referat")
-        file_format = doc_data.get("format", "pdf")
-        slide_count = doc_data.get("slide_count", 8)
+        d = user_data_store.get(uid, {})
+        title = d.get("title", "Mavzu")
+        style = d.get("style", "Uzbek")
+        dtype = d.get("doc_type", "referat")
+        fmt = d.get("format", "pdf")
+        scount = d.get("slide_count", 10)
+        theme = d.get("theme", 0)
         
-        # Generate AI content
-        content = await generate_ai_content(title, doc_type, style, slide_count)
-        
-        # Create file
-        if file_format == "pdf":
-            file_buffer = create_pdf(title, content, style, doc_type)
-            filename = f"{title[:30].replace(' ', '_')}.pdf"
-        elif file_format == "docx":
-            file_buffer = create_docx(title, content, style, doc_type)
-            filename = f"{title[:30].replace(' ', '_')}.docx"
-        elif file_format == "pptx":
-            file_buffer = create_pptx(title, content, style, slide_count)
-            filename = f"{title[:30].replace(' ', '_')}.pptx"
+        if fmt == "pptx":
+            content = await generate_slide_content(title, scount, style)
+            buf = create_pptx(title, content, style, scount, theme)
+            fname = f"{title[:25].replace(' ','_')}.pptx"
+        elif fmt == "docx":
+            content = await generate_doc_content(title, dtype, style)
+            buf = create_docx(title, content, style, dtype)
+            fname = f"{title[:25].replace(' ','_')}.docx"
         else:
-            file_buffer = create_pdf(title, content, style, doc_type)
-            filename = f"{title[:30].replace(' ', '_')}.pdf"
+            content = await generate_doc_content(title, dtype, style)
+            buf = create_pdf(title, content, style, dtype)
+            fname = f"{title[:25].replace(' ','_')}.pdf"
         
-        # Send file
-        await context.bot.send_document(
-            chat_id=user_id,
-            document=file_buffer,
-            filename=filename
-        )
+        await context.bot.send_document(chat_id=uid, document=buf, filename=fname)
         
-        # Update stats
-        user_data_store[user_id]["documents"] = user_data_store[user_id].get("documents", 0) + 1
+        user_data_store[uid]["documents"] = user_data_store[uid].get("documents", 0) + 1
         
-        # Success message
-        keyboard = [
+        kb = [
             [InlineKeyboardButton("📝 Yangi Hujjat", callback_data="new_doc")],
             [InlineKeyboardButton("🏠 Bosh Menyu", callback_data="start")]
         ]
-        
         await context.bot.send_message(
-            chat_id=user_id,
-            text=f"✅ *{filename}* tayyor!\n\n"
-                 f"📝 Tur: {doc_type}\n"
-                 f"📋 Uslub: {style}\n"
-                 f"📄 Format: {file_format.upper()}",
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            chat_id=uid,
+            text=f"✅ *{fname}* yuborildi!\n\n"
+                 f"📝 Tur: {dtype}\n📋 Uslub: {style}\n📄 Format: {fmt.upper()}",
+            reply_markup=InlineKeyboardMarkup(kb),
             parse_mode=ParseMode.MARKDOWN
         )
-        
     except Exception as e:
-        await context.bot.send_message(
-            chat_id=user_id,
-            text=f"❌ Xato yuz berdi: {str(e)}\n\nQayta urinib ko'ring: /start"
-        )
+        await context.bot.send_message(chat_id=uid, text=f"❌ Xato: {str(e)}\n\n/start dan qayta bosing")
 
-async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    info = user_data_store.get(user_id, {})
-    
-    keyboard = [[InlineKeyboardButton("🏠 Bosh Menyu", callback_data="start")]]
-    
-    await query.edit_message_text(
-        f"📊 *STATISTIKA*\n\n"
-        f"👤 Ism: {info.get('name', 'N/A')}\n"
-        f"📄 Hujjatlar: {info.get('documents', 0)}\n"
-        f"🆔 ID: {user_id}",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode=ParseMode.MARKDOWN
+async def cb_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    uid = q.from_user.id
+    info = user_data_store.get(uid, {})
+    kb = [[InlineKeyboardButton("🏠 Bosh Menyu", callback_data="start")]]
+    await q.edit_message_text(
+        f"📊 *Statistika*\n\n👤 {info.get('name','N/A')}\n"
+        f"📄 Hujjatlar: {info.get('documents',0)}\n🆔 {uid}",
+        reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN
     )
 
-async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    keyboard = [
-        [InlineKeyboardButton("📝 Boshlash", callback_data="new_doc")],
-        [InlineKeyboardButton("🏠 Bosh Menyu", callback_data="start")]
-    ]
-    
-    await query.edit_message_text(
+async def cb_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    kb = [[InlineKeyboardButton("📝 Boshlash", callback_data="new_doc")]]
+    await q.edit_message_text(
         "📖 *Qo'llanma*\n\n"
         "1️⃣ Hujjat turini tanlang\n"
         "2️⃣ Uslubni tanlang\n"
-        "3️⃣ Slaydlar sonini tanlang (slide uchun)\n"
-        "4️⃣ *Faqat mavzuni yozing!*\n"
-        "5️⃣ Bot o'zi hujjat tayyorlaydi ✅\n\n"
-        "⚡ 30-60 sekund ichida tayyor!",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode=ParseMode.MARKDOWN
+        "3️⃣ Slayd soni va rangni tanlang\n"
+        "4️⃣ Faqat *mavzuni* yozing\n"
+        "5️⃣ Bot o'zi yozib beradi! ✅",
+        reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN
     )
 
-async def new_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    keyboard = [
+async def cb_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    kb = [
         [InlineKeyboardButton("📝 Referat", callback_data="doc_referat"),
          InlineKeyboardButton("📚 Kurs Ishi", callback_data="doc_kurs")],
         [InlineKeyboardButton("📄 Maqola", callback_data="doc_maqola"),
          InlineKeyboardButton("🎯 Slide", callback_data="doc_slide")]
     ]
-    
-    await query.edit_message_text(
-        "🎓 Hujjat turini tanlang:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await q.edit_message_text("🎓 Hujjat turini tanlang:", reply_markup=InlineKeyboardMarkup(kb))
 
-async def start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    keyboard = [
+async def cb_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    kb = [
         [InlineKeyboardButton("📝 Referat", callback_data="doc_referat"),
          InlineKeyboardButton("📚 Kurs Ishi", callback_data="doc_kurs")],
         [InlineKeyboardButton("📄 Maqola", callback_data="doc_maqola"),
@@ -650,41 +662,27 @@ async def start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📊 Statistika", callback_data="stats"),
          InlineKeyboardButton("❓ Yordam", callback_data="help")]
     ]
-    
-    await query.edit_message_text(
-        "🎓 *Akademik Yordamchi Bot*\n\nHujjat turini tanlang:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📖 *Qo'llanma*\n\n"
-        "Faqat *mavzuni* yozing — bot o'zi hujjat yozadi!\n\n"
-        "/start - Boshlash",
-        parse_mode=ParseMode.MARKDOWN
-    )
+    await q.edit_message_text("🎓 *Akademik Yordamchi Bot*\n\nHujjat turini tanlang:",
+                              reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
-    
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    
-    app.add_handler(CallbackQueryHandler(handle_doc_type, pattern="^doc_"))
-    app.add_handler(CallbackQueryHandler(handle_style, pattern="^style_"))
-    app.add_handler(CallbackQueryHandler(handle_slide_count, pattern="^slides_"))
-    app.add_handler(CallbackQueryHandler(handle_format, pattern="^format_"))
-    app.add_handler(CallbackQueryHandler(new_doc, pattern="^new_doc$"))
-    app.add_handler(CallbackQueryHandler(handle_stats, pattern="^stats$"))
-    app.add_handler(CallbackQueryHandler(handle_help, pattern="^help$"))
-    app.add_handler(CallbackQueryHandler(start_callback, pattern="^start$"))
-    
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(CommandHandler("help", lambda u,c: u.message.reply_text("Boshlash uchun /start bosing")))
+    app.add_handler(CallbackQueryHandler(cb_doc, pattern="^doc_"))
+    app.add_handler(CallbackQueryHandler(cb_style, pattern="^style_"))
+    app.add_handler(CallbackQueryHandler(cb_slides, pattern="^slides_"))
+    app.add_handler(CallbackQueryHandler(cb_theme, pattern="^theme_"))
+    app.add_handler(CallbackQueryHandler(cb_fmt, pattern="^fmt_"))
+    app.add_handler(CallbackQueryHandler(cb_stats, pattern="^stats$"))
+    app.add_handler(CallbackQueryHandler(cb_help, pattern="^help$"))
+    app.add_handler(CallbackQueryHandler(cb_new, pattern="^new_doc$"))
+    app.add_handler(CallbackQueryHandler(cb_start, pattern="^start$"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     
     print("✅ BOT ISHGA TUSHDI!")
-    print("🤖 AI CONTENT GENERATION ACTIVE!")
-    print("📄 PDF + DOCX + PPTX READY!")
+    print("🎨 10 TA DIZAYN MAVJUD!")
+    print("🤖 AI CONTENT ACTIVE!")
     
     app.run_polling(drop_pending_updates=True)
 
