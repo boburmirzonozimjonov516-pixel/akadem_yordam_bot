@@ -1,330 +1,495 @@
 import os
 import asyncio
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Document
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+import aiohttp
+import json
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ParseMode
 from dotenv import load_dotenv
 from datetime import datetime
 from io import BytesIO
-import json
 
-# Import file generation libraries
-from reportlab.lib.pagesizes import letter
+# File generation
+from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Table, TableStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib import colors
-from reportlab.lib.units import inch
+from reportlab.lib.units import cm
 from docx import Document as DocxDocument
-from docx.shared import Pt, RGBColor, Inches
+from docx.shared import Pt, Inches
 from pptx import Presentation
-from pptx.util import Inches as PptxInches, Pt as PptxPt
+from pptx.util import Inches as PptxInches, Pt as PptxPt, Emu
+from pptx.dml.color import RGBColor as PptxRGB
+from pptx.enum.text import PP_ALIGN
 
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8625557628:AAHeUC2WxfMjJk-RRq3IxTtUJoc0H4XSsAM")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7758296066"))
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
-# States
-CHOOSING_TYPE, CHOOSING_STYLE, CHOOSING_FORMAT, WRITING_TITLE, WRITING_CONTENT = range(5)
-
-# Global storage
 user_data_store = {}
-documents_store = {}
 
-# ==================== FILE GENERATION ====================
+# ==================== AI CONTENT GENERATION ====================
 
-def generate_pdf(title, content, style, doc_type):
-    """Generate PDF file"""
+async def generate_ai_content(topic, doc_type, style, slide_count=8):
+    """Generate content using Gemini AI"""
+    
+    if not GEMINI_API_KEY:
+        # Fallback: generate simple content without AI
+        return generate_simple_content(topic, doc_type, style, slide_count)
+    
+    if doc_type == "slide":
+        prompt = f"""
+        "{topic}" mavzusida {slide_count} ta slayd uchun prezentatsiya mazmunini yoz.
+        Uslub: {style}
+        
+        Har bir slayd uchun:
+        SLAYD_1: [Sarlavha]
+        MAZMUN_1: [2-3 qator matn]
+        
+        FAQAT O'ZBEKCHA yoz. JSON emas, oddiy matn.
+        """
+    else:
+        doc_names = {
+            "referat": "Referat",
+            "kurs": "Kurs ishi",
+            "maqola": "Ilmiy maqola"
+        }
+        prompt = f"""
+        "{topic}" mavzusida {doc_names.get(doc_type, 'hujjat')} yoz.
+        Uslub: {style}
+        Hajm: 500-800 so'z
+        
+        Tuzilma:
+        1. Kirish
+        2. Asosiy qism (3-4 bo'lim)
+        3. Xulosa
+        
+        FAQAT O'ZBEKCHA yoz.
+        """
+    
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+        
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}]
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return data["candidates"][0]["content"]["parts"][0]["text"]
+                else:
+                    return generate_simple_content(topic, doc_type, style, slide_count)
+    except:
+        return generate_simple_content(topic, doc_type, style, slide_count)
+
+
+def generate_simple_content(topic, doc_type, style, slide_count=8):
+    """Generate content without AI (fallback)"""
+    
+    if doc_type == "slide":
+        slides = []
+        slides.append(f"SLAYD_1: {topic}")
+        slides.append(f"MAZMUN_1: Ushbu prezentatsiya {topic} mavzusiga bag'ishlangan. Biz bu sohaning asosiy jihatlarini ko'rib chiqamiz.")
+        
+        sections = [
+            ("Kirish", f"{topic} - bu zamonaviy dunyoda muhim ahamiyat kasb etuvchi soha. Uning asosiy xususiyatlari va ahamiyatini tushunish zarur."),
+            ("Asosiy tushunchalar", f"{topic} sohasidagi asosiy tushunchalar va atamalar bilan tanishib chiqamiz. Bu bilimlar keyingi tadqiqotlar uchun asos bo'ladi."),
+            ("Tarixiy rivojlanish", f"{topic} ning rivojlanish tarixi uzoq o'tmishga ega. Har bir davr o'zining muhim kashfiyotlari bilan ajralib turadi."),
+            ("Hozirgi holat", f"Hozirgi kunda {topic} sohasida katta yutuqlarga erishilgan. Yangi texnologiyalar va yondashuvlar faol qo'llanilmoqda."),
+            ("Muammolar va yechimlar", f"{topic} sohasida bir qator muammolar mavjud. Bular yechish yo'llari faol izlanmoqda va yangi yondashuvlar taklif etilmoqda."),
+            ("Kelajak istiqbollari", f"{topic} ning kelajagi juda istiqbolli. Yangi tadqiqotlar va innovatsiyalar bu sohani yanada rivojlantiradi."),
+            ("Xulosa", f"{topic} mavzusini o'rganish natijasida ko'pgina muhim xulosalarga keldik. Bu bilimlar amaliyotda keng qo'llanilishi mumkin."),
+        ]
+        
+        for i, (title, content) in enumerate(sections[:slide_count-1], 2):
+            slides.append(f"SLAYD_{i}: {title}")
+            slides.append(f"MAZMUN_{i}: {content}")
+        
+        return "\n".join(slides)
+    
+    else:
+        return f"""KIRISH
+
+{topic} - bu zamonaviy fanda va amaliyotda katta ahamiyat kasb etuvchi mavzu. Ushbu {doc_type} da biz bu mavzuning asosiy jihatlarini ko'rib chiqamiz va uning mohiyatini tushuntirishga harakat qilamiz.
+
+ASOSIY QISM
+
+{topic} sohasini o'rganish bir necha sabablarga ko'ra muhimdir. Birinchidan, bu soha hozirgi kunda jadal rivojlanmoqda. Ikkinchidan, uning amaliy ahamiyati nihoyatda katta.
+
+{topic} ning asosiy xususiyatlari quyidagilardan iborat:
+- Bu soha keng qamrovli bilimlarni o'z ichiga oladi
+- Amaliy tatbiq etish imkoniyatlari kengdir  
+- Zamonaviy texnologiyalar bilan uzviy bog'liqdir
+
+Tadqiqotlar shuni ko'rsatadiki, {topic} bo'yicha bilimlar hayotning turli sohalarida qo'llanilishi mumkin. Bu esa uni o'rganishni yanada muhim qiladi.
+
+XULOSA
+
+{topic} mavzusini o'rganish natijasida shunday xulosaga kelish mumkin: bu soha kelajakda yanada rivojlanib, insoniyat hayotiga ijobiy ta'sir ko'rsatadi. Shu sababli, bu mavzuni chuqur o'rganish va tadqiq etish zarurdir.
+
+Sana: {datetime.now().strftime('%d.%m.%Y')}
+Uslub: {style}
+"""
+
+
+# ==================== FILE GENERATORS ====================
+
+def create_pdf(title, content, style, doc_type):
+    """Create PDF"""
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.5*inch, bottomMargin=0.5*inch)
+    doc = SimpleDocTemplate(buffer, pagesize=A4,
+                           topMargin=2*cm, bottomMargin=2*cm,
+                           leftMargin=2.5*cm, rightMargin=2.5*cm)
     
-    styles = getSampleStyleSheet()
     story = []
+    styles_obj = getSampleStyleSheet()
     
-    # Header
-    header_style = ParagraphStyle(
-        'CustomHeader',
-        parent=styles['Heading1'],
-        fontSize=16,
-        textColor=colors.HexColor('#1f77b4'),
-        spaceAfter=30,
-        alignment=1
+    title_style = ParagraphStyle(
+        'Title', fontSize=18, textColor=colors.HexColor('#1a5276'),
+        spaceAfter=20, alignment=1, fontName='Helvetica-Bold'
     )
     
-    story.append(Paragraph(f"<b>{title}</b>", header_style))
-    story.append(Spacer(1, 0.2*inch))
+    heading_style = ParagraphStyle(
+        'Heading', fontSize=13, textColor=colors.HexColor('#2874a6'),
+        spaceAfter=10, spaceBefore=15, fontName='Helvetica-Bold'
+    )
     
-    # Metadata
-    metadata = f"""
-    <font size=10 color="#666666">
-    <b>Hujjat Turi:</b> {doc_type}<br/>
-    <b>Uslub:</b> {style}<br/>
-    <b>Sana:</b> {datetime.now().strftime('%d.%m.%Y')}<br/>
-    </font>
-    """
-    story.append(Paragraph(metadata, styles['Normal']))
-    story.append(Spacer(1, 0.3*inch))
+    body_style = ParagraphStyle(
+        'Body', fontSize=11, spaceAfter=8, leading=16,
+        alignment=4, fontName='Helvetica'
+    )
+    
+    meta_style = ParagraphStyle(
+        'Meta', fontSize=9, textColor=colors.HexColor('#888888'),
+        spaceAfter=20, alignment=1
+    )
+    
+    # Title
+    story.append(Paragraph(title, title_style))
+    story.append(Paragraph(
+        f"Tur: {doc_type} | Uslub: {style} | Sana: {datetime.now().strftime('%d.%m.%Y')}",
+        meta_style
+    ))
+    story.append(Spacer(1, 0.3*cm))
     
     # Content
-    content_style = ParagraphStyle(
-        'ContentStyle',
-        parent=styles['Normal'],
-        fontSize=11,
-        alignment=4,
-        spaceAfter=12
-    )
-    
-    # Split content by paragraphs
-    paragraphs = content.split('\n\n')
-    for para in paragraphs:
-        if para.strip():
-            story.append(Paragraph(para.strip(), content_style))
-            story.append(Spacer(1, 0.1*inch))
-    
-    # Footer
-    story.append(Spacer(1, 0.5*inch))
-    footer = """
-    <font size=9 color="#999999">
-    ================================================================<br/>
-    Generated by Akadem Yordamchi Bot<br/>
-    User ID: {} | Style: {} | Type: {}<br/>
-    ================================================================
-    """.format(ADMIN_ID, style, doc_type)
-    story.append(Paragraph(footer, styles['Normal']))
+    for line in content.split('\n'):
+        line = line.strip()
+        if not line:
+            story.append(Spacer(1, 0.2*cm))
+            continue
+        
+        if line.isupper() and len(line) < 50:
+            story.append(Paragraph(line, heading_style))
+        else:
+            story.append(Paragraph(line, body_style))
     
     doc.build(story)
     buffer.seek(0)
     return buffer
 
-def generate_docx(title, content, style, doc_type):
-    """Generate DOCX file"""
+
+def create_docx(title, content, style, doc_type):
+    """Create DOCX"""
     doc = DocxDocument()
     
-    # Add title
-    title_para = doc.add_paragraph()
-    title_run = title_para.add_run(title)
-    title_run.font.size = Pt(16)
-    title_run.font.bold = True
-    title_run.font.color.rgb = RGBColor(31, 119, 180)
+    # Title
+    title_para = doc.add_heading(title, 0)
+    title_para.alignment = 1
     
-    # Add metadata
-    meta_para = doc.add_paragraph()
-    meta_text = f"Hujjat Turi: {doc_type} | Uslub: {style} | Sana: {datetime.now().strftime('%d.%m.%Y')}"
-    meta_run = meta_para.add_run(meta_text)
-    meta_run.font.size = Pt(10)
-    meta_run.font.color.rgb = RGBColor(100, 100, 100)
+    # Metadata
+    meta = doc.add_paragraph(f"Tur: {doc_type} | Uslub: {style} | Sana: {datetime.now().strftime('%d.%m.%Y')}")
+    meta.alignment = 1
+    meta.runs[0].font.size = Pt(9)
+    meta.runs[0].font.color.rgb = None
     
-    doc.add_paragraph()  # Empty line
-    
-    # Add content
-    for paragraph in content.split('\n\n'):
-        if paragraph.strip():
-            para = doc.add_paragraph(paragraph.strip(), style='Normal')
-            for run in para.runs:
-                run.font.size = Pt(11)
-    
-    # Add footer
     doc.add_paragraph()
-    footer_para = doc.add_paragraph("=" * 60)
-    footer_text = f"Generated by Akadem Yordamchi Bot | User ID: {ADMIN_ID}"
-    footer_run = footer_para.add_run(footer_text)
-    footer_run.font.size = Pt(9)
-    footer_run.font.color.rgb = RGBColor(150, 150, 150)
+    
+    # Content
+    for line in content.split('\n'):
+        line = line.strip()
+        if not line:
+            doc.add_paragraph()
+            continue
+        
+        if line.isupper() and len(line) < 50:
+            doc.add_heading(line, 1)
+        else:
+            p = doc.add_paragraph(line)
+            p.runs[0].font.size = Pt(11) if p.runs else None
     
     buffer = BytesIO()
     doc.save(buffer)
     buffer.seek(0)
     return buffer
 
-def generate_pptx(title, content, style, doc_type):
-    """Generate PPTX (PowerPoint) file"""
+
+def create_pptx(title, content, style, slide_count=8):
+    """Create PPTX from AI content"""
     prs = Presentation()
-    prs.slide_width = PptxInches(10)
+    prs.slide_width = PptxInches(13.33)
     prs.slide_height = PptxInches(7.5)
     
-    # Slide 1: Title
-    slide1 = prs.slides.add_slide(prs.slide_layouts[6])  # Blank layout
-    background = slide1.background
-    fill = background.fill
-    fill.solid()
-    fill.fore_color.rgb = RGBColor(31, 119, 180)
+    # Parse slides from content
+    slides_data = []
+    lines = content.split('\n')
     
-    title_box = slide1.shapes.add_textbox(PptxInches(0.5), PptxInches(2.5), PptxInches(9), PptxInches(2))
-    title_frame = title_box.text_frame
-    title_frame.word_wrap = True
-    title_p = title_frame.paragraphs[0]
-    title_p.text = title
-    title_p.font.size = PptxPt(44)
-    title_p.font.bold = True
-    title_p.font.color.rgb = RGBColor(255, 255, 255)
+    current_title = ""
+    current_content = ""
     
-    # Slide 2: Metadata
-    slide2 = prs.slides.add_slide(prs.slide_layouts[6])
+    for line in lines:
+        line = line.strip()
+        if line.startswith("SLAYD_"):
+            if current_title:
+                slides_data.append((current_title, current_content))
+                current_content = ""
+            current_title = line.split(":", 1)[1].strip() if ":" in line else line
+        elif line.startswith("MAZMUN_"):
+            current_content = line.split(":", 1)[1].strip() if ":" in line else line
     
-    meta_box = slide2.shapes.add_textbox(PptxInches(1), PptxInches(1), PptxInches(8), PptxInches(2))
-    meta_frame = meta_box.text_frame
-    meta_text = f"Hujjat Turi: {doc_type}\nUslub: {style}\nSana: {datetime.now().strftime('%d.%m.%Y')}"
-    meta_frame.text = meta_text
-    for paragraph in meta_frame.paragraphs:
-        paragraph.font.size = PptxPt(18)
+    if current_title:
+        slides_data.append((current_title, current_content))
     
-    # Slide 3+: Content (split into chunks)
-    content_per_slide = 300  # Characters per slide
-    content_chunks = [content[i:i+content_per_slide] for i in range(0, len(content), content_per_slide)]
+    # If no slides parsed, create from plain text
+    if not slides_data:
+        slides_data = [(title, content[:500])]
     
-    for chunk in content_chunks:
-        slide = prs.slides.add_slide(prs.slide_layouts[6])
-        content_box = slide.shapes.add_textbox(PptxInches(0.5), PptxInches(0.5), PptxInches(9), PptxInches(6.5))
-        content_frame = content_box.text_frame
-        content_frame.word_wrap = True
-        content_frame.text = chunk.strip()
-        for paragraph in content_frame.paragraphs:
-            paragraph.font.size = PptxPt(14)
+    # Color scheme
+    bg_colors = [
+        (26, 82, 118),   # Dark blue
+        (23, 97, 86),    # Dark green
+        (91, 44, 111),   # Dark purple
+        (120, 40, 31),   # Dark red
+        (30, 132, 73),   # Green
+        (21, 67, 96),    # Navy
+        (100, 30, 22),   # Maroon
+        (17, 122, 101),  # Teal
+    ]
+    
+    for i, (slide_title, slide_content) in enumerate(slides_data):
+        slide = prs.slides.add_slide(prs.slide_layouts[6])  # Blank
+        
+        # Background color
+        bg_color = bg_colors[i % len(bg_colors)]
+        background = slide.background
+        fill = background.fill
+        fill.solid()
+        fill.fore_color.rgb = PptxRGB(*bg_color)
+        
+        # Slide number (except first)
+        if i > 0:
+            num_box = slide.shapes.add_textbox(
+                PptxInches(12.5), PptxInches(7.1),
+                PptxInches(0.6), PptxInches(0.3)
+            )
+            num_tf = num_box.text_frame
+            num_tf.text = str(i)
+            num_tf.paragraphs[0].font.size = PptxPt(12)
+            num_tf.paragraphs[0].font.color.rgb = PptxRGB(255, 255, 255)
+            num_tf.paragraphs[0].font.bold = True
+        
+        if i == 0:
+            # Title slide
+            # Main title
+            title_box = slide.shapes.add_textbox(
+                PptxInches(1), PptxInches(2.5),
+                PptxInches(11.33), PptxInches(2)
+            )
+            tf = title_box.text_frame
+            tf.word_wrap = True
+            p = tf.paragraphs[0]
+            p.text = slide_title
+            p.font.size = PptxPt(44)
+            p.font.bold = True
+            p.font.color.rgb = PptxRGB(255, 255, 255)
+            p.alignment = PP_ALIGN.CENTER
+            
+            # Subtitle
+            sub_box = slide.shapes.add_textbox(
+                PptxInches(1), PptxInches(5),
+                PptxInches(11.33), PptxInches(1)
+            )
+            sub_tf = sub_box.text_frame
+            sub_p = sub_tf.paragraphs[0]
+            sub_p.text = f"{style} | {datetime.now().strftime('%d.%m.%Y')}"
+            sub_p.font.size = PptxPt(18)
+            sub_p.font.color.rgb = PptxRGB(200, 200, 200)
+            sub_p.alignment = PP_ALIGN.CENTER
+        else:
+            # Content slide
+            # Title bar
+            title_bar = slide.shapes.add_textbox(
+                PptxInches(0.5), PptxInches(0.3),
+                PptxInches(12.33), PptxInches(1)
+            )
+            title_tf = title_bar.text_frame
+            title_p = title_tf.paragraphs[0]
+            title_p.text = slide_title
+            title_p.font.size = PptxPt(28)
+            title_p.font.bold = True
+            title_p.font.color.rgb = PptxRGB(255, 255, 255)
+            
+            # Divider line (rectangle)
+            line_shape = slide.shapes.add_shape(
+                1,  # Rectangle
+                PptxInches(0.5), PptxInches(1.4),
+                PptxInches(12.33), Emu(50000)
+            )
+            line_shape.fill.solid()
+            line_shape.fill.fore_color.rgb = PptxRGB(255, 255, 255)
+            line_shape.line.fill.background()
+            
+            # Content
+            content_box = slide.shapes.add_textbox(
+                PptxInches(0.5), PptxInches(1.6),
+                PptxInches(12.33), PptxInches(5.5)
+            )
+            content_tf = content_box.text_frame
+            content_tf.word_wrap = True
+            
+            content_p = content_tf.paragraphs[0]
+            content_p.text = slide_content
+            content_p.font.size = PptxPt(20)
+            content_p.font.color.rgb = PptxRGB(240, 240, 240)
     
     buffer = BytesIO()
     prs.save(buffer)
     buffer.seek(0)
     return buffer
 
+
 # ==================== BOT HANDLERS ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start command"""
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name
     
     if user_id not in user_data_store:
-        user_data_store[user_id] = {
-            "name": user_name,
-            "documents": 0,
-            "created_at": datetime.now()
-        }
+        user_data_store[user_id] = {"name": user_name, "documents": 0}
     
     keyboard = [
-        [
-            InlineKeyboardButton("📝 Referat", callback_data="doc_referat"),
-            InlineKeyboardButton("📚 Kurs Ishi", callback_data="doc_kurs")
-        ],
-        [
-            InlineKeyboardButton("📄 Maqola", callback_data="doc_maqola"),
-            InlineKeyboardButton("🎯 Slide", callback_data="doc_slide")
-        ],
-        [
-            InlineKeyboardButton("📊 Statistika", callback_data="stats"),
-            InlineKeyboardButton("❓ Yordam", callback_data="help")
-        ]
+        [InlineKeyboardButton("📝 Referat", callback_data="doc_referat"),
+         InlineKeyboardButton("📚 Kurs Ishi", callback_data="doc_kurs")],
+        [InlineKeyboardButton("📄 Maqola", callback_data="doc_maqola"),
+         InlineKeyboardButton("🎯 Slide", callback_data="doc_slide")],
+        [InlineKeyboardButton("📊 Statistika", callback_data="stats"),
+         InlineKeyboardButton("❓ Yordam", callback_data="help")]
     ]
     
     await update.message.reply_text(
-        f"🎓 Assalomu alaykum, {user_name}!\n\n"
-        "**Akademik Yordamchi Botga Xush Kelibsiz!**\n\n"
-        "Siz quyidagi hujjatlarni yarata olasiz:\n"
-        "📝 Referat - Kichik tadqiqot ishi\n"
-        "📚 Kurs Ishi - Kurs oxirida topshirish\n"
-        "📄 Maqola - Ilmiy maqola\n"
-        "🎯 Slide - Prezentasiya\n\n"
-        "💡 Birinchi hujjat TEKIN!",
+        f"🎓 Assalomu alaykum, *{user_name}*!\n\n"
+        "Siz faqat *mavzuni* yozing — qolganini bot o'zi qiladi:\n\n"
+        "📝 Referat\n📚 Kurs Ishi\n📄 Maqola\n🎯 Slide (PPTX)\n\n"
+        "💡 Birinchi hujjat *TEKIN!*",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
 
 async def handle_doc_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle document type"""
     query = update.callback_query
     await query.answer()
-    
     user_id = query.from_user.id
     doc_type = query.data.replace("doc_", "")
     
     if user_id not in user_data_store:
         user_data_store[user_id] = {}
-    
     user_data_store[user_id]["doc_type"] = doc_type
     
-    doc_types = {
-        "referat": "📝 Referat",
-        "kurs": "📚 Kurs Ishi",
-        "maqola": "📄 Maqola",
-        "slide": "🎯 Slide"
-    }
+    doc_names = {"referat": "📝 Referat", "kurs": "📚 Kurs Ishi",
+                 "maqola": "📄 Maqola", "slide": "🎯 Slide"}
     
     keyboard = [
-        [
-            InlineKeyboardButton("🎯 APA", callback_data="style_apa"),
-            InlineKeyboardButton("🎯 Harvard", callback_data="style_harvard")
-        ],
-        [
-            InlineKeyboardButton("🎯 Uzbek", callback_data="style_uzbek"),
-            InlineKeyboardButton("🎯 Chicago", callback_data="style_chicago")
-        ]
+        [InlineKeyboardButton("🎯 APA", callback_data="style_apa"),
+         InlineKeyboardButton("🎯 Harvard", callback_data="style_harvard")],
+        [InlineKeyboardButton("🎯 O'zbek", callback_data="style_uzbek"),
+         InlineKeyboardButton("🎯 Chicago", callback_data="style_chicago")]
     ]
     
     await query.edit_message_text(
-        f"✅ Siz {doc_types.get(doc_type)} turini tanladingiz\n\n"
-        "📋 **Endi uslubni tanlang:**",
+        f"✅ *{doc_names.get(doc_type)}* tanlandi\n\n📋 Uslubni tanlang:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
 
 async def handle_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle style selection"""
     query = update.callback_query
     await query.answer()
-    
     user_id = query.from_user.id
     style = query.data.replace("style_", "")
     
     if user_id not in user_data_store:
         user_data_store[user_id] = {}
-    
     user_data_store[user_id]["style"] = style
     
-    styles = {
-        "apa": "APA Style",
-        "harvard": "Harvard Style",
-        "uzbek": "O'zbek Standarti",
-        "chicago": "Chicago Style"
-    }
+    doc_type = user_data_store[user_id].get("doc_type", "")
     
-    keyboard = [
-        [
-            InlineKeyboardButton("📄 PDF", callback_data="format_pdf"),
-            InlineKeyboardButton("📋 DOCX", callback_data="format_docx")
-        ],
-        [
-            InlineKeyboardButton("🎯 PPTX", callback_data="format_pptx")
+    # Slide uchun format tanlash
+    if doc_type == "slide":
+        keyboard = [
+            [InlineKeyboardButton("5 ta slayd", callback_data="slides_5"),
+             InlineKeyboardButton("8 ta slayd", callback_data="slides_8")],
+            [InlineKeyboardButton("10 ta slayd", callback_data="slides_10"),
+             InlineKeyboardButton("15 ta slayd", callback_data="slides_15")]
         ]
-    ]
-    
-    await query.edit_message_text(
-        f"✅ Siz {styles.get(style)} ni tanladingiz\n\n"
-        "📄 **Fayl formatini tanlang:**",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode=ParseMode.MARKDOWN
-    )
+        await query.edit_message_text(
+            "🎯 *Nechta slayd bo'lsin?*",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.MARKDOWN
+        )
+    else:
+        keyboard = [
+            [InlineKeyboardButton("📄 PDF", callback_data="format_pdf"),
+             InlineKeyboardButton("📋 DOCX", callback_data="format_docx")]
+        ]
+        await query.edit_message_text(
+            "📄 *Format tanlang:*",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.MARKDOWN
+        )
 
-async def handle_format(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle format selection"""
+async def handle_slide_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    user_id = query.from_user.id
+    count = int(query.data.replace("slides_", ""))
     
+    if user_id not in user_data_store:
+        user_data_store[user_id] = {}
+    user_data_store[user_id]["slide_count"] = count
+    user_data_store[user_id]["format"] = "pptx"
+    
+    await query.edit_message_text(
+        f"✅ *{count} ta slayd* tanlandi\n\n"
+        "✏️ *Mavzuni yozing:*\n\n"
+        "_Misol: \"Sun'iy intellekt va ta'lim\"_",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    
+    context.user_data[user_id] = {"state": "title"}
+
+async def handle_format(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
     user_id = query.from_user.id
     file_format = query.data.replace("format_", "")
     
     if user_id not in user_data_store:
         user_data_store[user_id] = {}
-    
     user_data_store[user_id]["format"] = file_format
     
     await query.edit_message_text(
-        "✏️ **Hujjatning sarlavhasini yuboring:**\n\n"
-        "_Misol: \"Kimyo texnologiyasi va IT\"_"
+        "✏️ *Mavzuni yozing:*\n\n"
+        "_Misol: \"Kimyo texnologiyasi va IT\"_",
+        parse_mode=ParseMode.MARKDOWN
     )
     
     context.user_data[user_id] = {"state": "title"}
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle messages"""
     user_id = update.effective_user.id
     text = update.message.text
     
@@ -334,80 +499,58 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = context.user_data[user_id].get("state")
     
     if state == "title":
-        if user_id not in user_data_store:
-            user_data_store[user_id] = {}
-        
         user_data_store[user_id]["title"] = text
-        context.user_data[user_id]["state"] = "content"
+        context.user_data[user_id]["state"] = None
         
+        # Start generating immediately!
         await update.message.reply_text(
-            f"✅ Sarlavha qabul qilindi: **{text}**\n\n"
-            "📝 **Endi matnni yuboring:**\n\n"
-            "_Uzun bo'lsa, bir nechta xabarda yuboring._"
-        )
-    
-    elif state == "content":
-        if user_id not in user_data_store:
-            user_data_store[user_id] = {}
-        
-        if "content" in user_data_store[user_id]:
-            user_data_store[user_id]["content"] += "\n\n" + text
-        else:
-            user_data_store[user_id]["content"] = text
-        
-        char_count = len(user_data_store[user_id]["content"])
-        word_count = len(user_data_store[user_id]["content"].split())
-        
-        keyboard = [
-            [InlineKeyboardButton("✅ Tugatish va Fayl Olish", callback_data="finish_doc")],
-            [InlineKeyboardButton("➕ Yana Matn Qo'shish", callback_data="add_more")],
-            [InlineKeyboardButton("❌ Bekor Qilish", callback_data="cancel_doc")]
-        ]
-        
-        await update.message.reply_text(
-            f"✅ **Matn Qabul Qilindi!**\n\n"
-            f"📊 **Statistika:**\n"
-            f"   • Belgisiz: {char_count}\n"
-            f"   • So'zlar: {word_count}\n\n"
-            f"🔄 **Quyidagini Tanlang:**",
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            f"✅ Mavzu qabul qilindi: *{text}*\n\n"
+            "⏳ Hujjat tayyorlanmoqda...\n"
+            "_(30-60 sekund kuting)_",
             parse_mode=ParseMode.MARKDOWN
         )
-
-async def finish_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Finish and generate document"""
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    
-    if user_id not in user_data_store:
-        await query.edit_message_text("❌ Xato sodir bo'ldi!")
-        return
-    
-    doc_data = user_data_store[user_id]
-    title = doc_data.get("title", "Hujjat")
-    content = doc_data.get("content", "")
-    style = doc_data.get("style", "APA")
-    doc_type = doc_data.get("doc_type", "Referat")
-    file_format = doc_data.get("format", "pdf")
-    
-    try:
-        await query.edit_message_text("⏳ Hujjat tayyorlanmoqda...")
         
-        # Generate file based on format
+        # Generate document automatically
+        await auto_generate_document(update, context, user_id)
+    else:
+        # User sent message without selecting type
+        keyboard = [
+            [InlineKeyboardButton("📝 Referat", callback_data="doc_referat"),
+             InlineKeyboardButton("📚 Kurs Ishi", callback_data="doc_kurs")],
+            [InlineKeyboardButton("📄 Maqola", callback_data="doc_maqola"),
+             InlineKeyboardButton("🎯 Slide", callback_data="doc_slide")]
+        ]
+        await update.message.reply_text(
+            "📋 Avval hujjat turini tanlang:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+async def auto_generate_document(update, context, user_id):
+    """Auto generate document with AI"""
+    try:
+        doc_data = user_data_store.get(user_id, {})
+        title = doc_data.get("title", "Mavzu")
+        style = doc_data.get("style", "uzbek").upper()
+        doc_type = doc_data.get("doc_type", "referat")
+        file_format = doc_data.get("format", "pdf")
+        slide_count = doc_data.get("slide_count", 8)
+        
+        # Generate AI content
+        content = await generate_ai_content(title, doc_type, style, slide_count)
+        
+        # Create file
         if file_format == "pdf":
-            file_buffer = generate_pdf(title, content, style, doc_type)
-            filename = f"{title.replace(' ', '_')}.pdf"
-            mime_type = "application/pdf"
+            file_buffer = create_pdf(title, content, style, doc_type)
+            filename = f"{title[:30].replace(' ', '_')}.pdf"
         elif file_format == "docx":
-            file_buffer = generate_docx(title, content, style, doc_type)
-            filename = f"{title.replace(' ', '_')}.docx"
-            mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            file_buffer = create_docx(title, content, style, doc_type)
+            filename = f"{title[:30].replace(' ', '_')}.docx"
         elif file_format == "pptx":
-            file_buffer = generate_pptx(title, content, style, doc_type)
-            filename = f"{title.replace(' ', '_')}.pptx"
-            mime_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            file_buffer = create_pptx(title, content, style, slide_count)
+            filename = f"{title[:30].replace(' ', '_')}.pptx"
+        else:
+            file_buffer = create_pdf(title, content, style, doc_type)
+            filename = f"{title[:30].replace(' ', '_')}.pdf"
         
         # Send file
         await context.bot.send_document(
@@ -416,140 +559,51 @@ async def finish_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             filename=filename
         )
         
-        # Update statistics
-        if user_id in user_data_store:
-            user_data_store[user_id]["documents"] = user_data_store[user_id].get("documents", 0) + 1
+        # Update stats
+        user_data_store[user_id]["documents"] = user_data_store[user_id].get("documents", 0) + 1
         
-        # Show success message
+        # Success message
         keyboard = [
             [InlineKeyboardButton("📝 Yangi Hujjat", callback_data="new_doc")],
-            [InlineKeyboardButton("📊 Statistika", callback_data="stats")],
             [InlineKeyboardButton("🏠 Bosh Menyu", callback_data="start")]
         ]
         
         await context.bot.send_message(
             chat_id=user_id,
-            text=f"✅ **Hujjat Tayyorlandi va Yuborildi!**\n\n"
+            text=f"✅ *{filename}* tayyor!\n\n"
                  f"📝 Tur: {doc_type}\n"
                  f"📋 Uslub: {style}\n"
-                 f"📄 Format: {file_format.upper()}\n\n"
-                 f"🎁 Birinchi hujjat tekin edi!",
+                 f"📄 Format: {file_format.upper()}",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.MARKDOWN
         )
         
-        # Clear user data
-        context.user_data[user_id]["state"] = None
-        
     except Exception as e:
-        print(f"Error: {e}")
-        await context.bot.send_message(chat_id=user_id, text=f"❌ Xato: {str(e)}")
-
-async def add_more(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Add more content"""
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    if user_id in context.user_data:
-        context.user_data[user_id]["state"] = "content"
-    
-    await query.edit_message_text("📝 **Yana Matnni Yuboring:**")
-
-async def cancel_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancel document"""
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    if user_id in context.user_data:
-        del context.user_data[user_id]
-    
-    keyboard = [
-        [
-            InlineKeyboardButton("📝 Referat", callback_data="doc_referat"),
-            InlineKeyboardButton("📚 Kurs Ishi", callback_data="doc_kurs")
-        ],
-        [
-            InlineKeyboardButton("📄 Maqola", callback_data="doc_maqola"),
-            InlineKeyboardButton("🎯 Slide", callback_data="doc_slide")
-        ]
-    ]
-    
-    await query.edit_message_text(
-        "❌ **Hujjat yaratilishi bekor qilindi!**\n\n"
-        "Yangi hujjat yaratmoqchimisiz?",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-async def new_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """New document"""
-    query = update.callback_query
-    await query.answer()
-    
-    keyboard = [
-        [
-            InlineKeyboardButton("📝 Referat", callback_data="doc_referat"),
-            InlineKeyboardButton("📚 Kurs Ishi", callback_data="doc_kurs")
-        ],
-        [
-            InlineKeyboardButton("📄 Maqola", callback_data="doc_maqola"),
-            InlineKeyboardButton("🎯 Slide", callback_data="doc_slide")
-        ]
-    ]
-    
-    await query.edit_message_text(
-        "🎓 **Hujjat turini tanlang:**",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=f"❌ Xato yuz berdi: {str(e)}\n\nQayta urinib ko'ring: /start"
+        )
 
 async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Statistics"""
     query = update.callback_query
     await query.answer()
-    
     user_id = query.from_user.id
-    user_info = user_data_store.get(user_id, {})
+    info = user_data_store.get(user_id, {})
     
-    text = (
-        f"📊 **SHAXSIY STATISTIKA**\n\n"
-        f"👤 Ism: {user_info.get('name', 'Unknown')}\n"
-        f"📄 Hujjatlar: {user_info.get('documents', 0)}\n"
-        f"💾 User ID: {user_id}\n\n"
-        f"✅ Bot ishga tushgan!"
-    )
-    
-    keyboard = [
-        [InlineKeyboardButton("📝 Yangi Hujjat", callback_data="new_doc")],
-        [InlineKeyboardButton("🏠 Bosh Menyu", callback_data="start")]
-    ]
+    keyboard = [[InlineKeyboardButton("🏠 Bosh Menyu", callback_data="start")]]
     
     await query.edit_message_text(
-        text,
+        f"📊 *STATISTIKA*\n\n"
+        f"👤 Ism: {info.get('name', 'N/A')}\n"
+        f"📄 Hujjatlar: {info.get('documents', 0)}\n"
+        f"🆔 ID: {user_id}",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
 
 async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Help"""
     query = update.callback_query
     await query.answer()
-    
-    text = (
-        "📖 **Qo'llanma**\n\n"
-        "1️⃣ Hujjat turini tanlang\n"
-        "2️⃣ Uslubni tanlang (APA, Harvard, Uzbek, Chicago)\n"
-        "3️⃣ Fayl formatini tanlang (PDF, DOCX, PPTX)\n"
-        "4️⃣ Sarlavha yuboring\n"
-        "5️⃣ Matnni yuboring\n"
-        "6️⃣ Hujjat tayyor bo'ladi!\n\n"
-        "💡 **Birinchi hujjat TEKIN!**\n\n"
-        "📝 **Hujjat turlari:**\n"
-        "• Referat - Kichik tadqiqot\n"
-        "• Kurs Ishi - Kurs oxirida topshirish\n"
-        "• Maqola - Ilmiy maqola\n"
-        "• Slide - Prezentasiya"
-    )
     
     keyboard = [
         [InlineKeyboardButton("📝 Boshlash", callback_data="new_doc")],
@@ -557,86 +611,82 @@ async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     
     await query.edit_message_text(
-        text,
+        "📖 *Qo'llanma*\n\n"
+        "1️⃣ Hujjat turini tanlang\n"
+        "2️⃣ Uslubni tanlang\n"
+        "3️⃣ Slaydlar sonini tanlang (slide uchun)\n"
+        "4️⃣ *Faqat mavzuni yozing!*\n"
+        "5️⃣ Bot o'zi hujjat tayyorlaydi ✅\n\n"
+        "⚡ 30-60 sekund ichida tayyor!",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
 
-async def handle_start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start from callback"""
+async def new_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
     keyboard = [
-        [
-            InlineKeyboardButton("📝 Referat", callback_data="doc_referat"),
-            InlineKeyboardButton("📚 Kurs Ishi", callback_data="doc_kurs")
-        ],
-        [
-            InlineKeyboardButton("📄 Maqola", callback_data="doc_maqola"),
-            InlineKeyboardButton("🎯 Slide", callback_data="doc_slide")
-        ],
-        [
-            InlineKeyboardButton("📊 Statistika", callback_data="stats"),
-            InlineKeyboardButton("❓ Yordam", callback_data="help")
-        ]
+        [InlineKeyboardButton("📝 Referat", callback_data="doc_referat"),
+         InlineKeyboardButton("📚 Kurs Ishi", callback_data="doc_kurs")],
+        [InlineKeyboardButton("📄 Maqola", callback_data="doc_maqola"),
+         InlineKeyboardButton("🎯 Slide", callback_data="doc_slide")]
     ]
     
     await query.edit_message_text(
-        "🎓 **Akademik Yordamchi Bot**\n\n"
-        "Hujjat turini tanlang:",
+        "🎓 Hujjat turini tanlang:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def start_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    keyboard = [
+        [InlineKeyboardButton("📝 Referat", callback_data="doc_referat"),
+         InlineKeyboardButton("📚 Kurs Ishi", callback_data="doc_kurs")],
+        [InlineKeyboardButton("📄 Maqola", callback_data="doc_maqola"),
+         InlineKeyboardButton("🎯 Slide", callback_data="doc_slide")],
+        [InlineKeyboardButton("📊 Statistika", callback_data="stats"),
+         InlineKeyboardButton("❓ Yordam", callback_data="help")]
+    ]
+    
+    await query.edit_message_text(
+        "🎓 *Akademik Yordamchi Bot*\n\nHujjat turini tanlang:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Help command"""
-    keyboard = [
-        [InlineKeyboardButton("📝 Boshlash", callback_data="new_doc")],
-        [InlineKeyboardButton("🏠 Bosh Menyu", callback_data="start")]
-    ]
-    
     await update.message.reply_text(
-        "📖 **Qo'llanma**\n\n"
-        "/start - Botni boshlash\n"
-        "/help - Yordam\n\n"
-        "**Hujjat yaratish uchun:**\n"
-        "1. Hujjat turini tanlang\n"
-        "2. Uslubni tanlang\n"
-        "3. Fayl formatini tanlang\n"
-        "4. Sarlavha va matnni yuboring",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        "📖 *Qo'llanma*\n\n"
+        "Faqat *mavzuni* yozing — bot o'zi hujjat yozadi!\n\n"
+        "/start - Boshlash",
         parse_mode=ParseMode.MARKDOWN
     )
 
 def main():
-    """Start bot"""
-    application = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).build()
     
-    # Commands
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
     
-    # Callbacks
-    application.add_handler(CallbackQueryHandler(handle_doc_type, pattern="^doc_"))
-    application.add_handler(CallbackQueryHandler(handle_style, pattern="^style_"))
-    application.add_handler(CallbackQueryHandler(handle_format, pattern="^format_"))
-    application.add_handler(CallbackQueryHandler(finish_document, pattern="^finish_doc$"))
-    application.add_handler(CallbackQueryHandler(add_more, pattern="^add_more$"))
-    application.add_handler(CallbackQueryHandler(cancel_doc, pattern="^cancel_doc$"))
-    application.add_handler(CallbackQueryHandler(new_doc, pattern="^new_doc$"))
-    application.add_handler(CallbackQueryHandler(handle_stats, pattern="^stats$"))
-    application.add_handler(CallbackQueryHandler(handle_help, pattern="^help$"))
-    application.add_handler(CallbackQueryHandler(handle_start_callback, pattern="^start$"))
+    app.add_handler(CallbackQueryHandler(handle_doc_type, pattern="^doc_"))
+    app.add_handler(CallbackQueryHandler(handle_style, pattern="^style_"))
+    app.add_handler(CallbackQueryHandler(handle_slide_count, pattern="^slides_"))
+    app.add_handler(CallbackQueryHandler(handle_format, pattern="^format_"))
+    app.add_handler(CallbackQueryHandler(new_doc, pattern="^new_doc$"))
+    app.add_handler(CallbackQueryHandler(handle_stats, pattern="^stats$"))
+    app.add_handler(CallbackQueryHandler(handle_help, pattern="^help$"))
+    app.add_handler(CallbackQueryHandler(start_callback, pattern="^start$"))
     
-    # Messages
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     print("✅ BOT ISHGA TUSHDI!")
-    print("🚀 FILE GENERATION ACTIVE!")
-    print("📄 PDF, DOCX, PPTX SUPPORT!")
+    print("🤖 AI CONTENT GENERATION ACTIVE!")
+    print("📄 PDF + DOCX + PPTX READY!")
     
-    application.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
