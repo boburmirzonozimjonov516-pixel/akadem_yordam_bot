@@ -2,7 +2,7 @@ import os
 import asyncio
 import aiohttp
 import json
-import random
+import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ParseMode
@@ -10,80 +10,468 @@ from dotenv import load_dotenv
 from datetime import datetime
 from io import BytesIO
 
+# Google APIs
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
+
+# PDF/DOCX
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
 from reportlab.lib import colors
 from reportlab.lib.units import cm
-
 from docx import Document as DocxDocument
-from docx.shared import Pt, RGBColor, Inches
+from docx.shared import Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-
-from pptx import Presentation
-from pptx.util import Inches as Inch, Pt as PPt, Emu
-from pptx.dml.color import RGBColor as PRGB
-from pptx.enum.text import PP_ALIGN
 
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8625557628:AAHeUC2WxfMjJk-RRq3IxTtUJoc0H4XSsAM")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7758296066"))
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GOOGLE_CREDENTIALS = os.getenv("GOOGLE_CREDENTIALS", "")
+GOOGLE_SERVICE_EMAIL = os.getenv("GOOGLE_SERVICE_EMAIL", "")
 
 user_data_store = {}
 
-# ===================== UNSPLASH IMAGES =====================
+# ===================== GOOGLE SLIDES =====================
 
-async def get_topic_image(topic_en):
-    """Get real image from Unsplash (free, no key needed)"""
+def get_google_services():
+    """Get Google Slides and Drive services"""
     try:
-        queries = [topic_en, "education", "technology", "science", "business"]
-        for q in queries:
-            url = f"https://source.unsplash.com/1280x720/?{q.replace(' ', ',')}"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10), allow_redirects=True) as resp:
-                    if resp.status == 200 and 'image' in resp.headers.get('content-type', ''):
-                        return BytesIO(await resp.read())
-    except:
-        pass
-    return None
+        creds_dict = json.loads(GOOGLE_CREDENTIALS)
+        creds = service_account.Credentials.from_service_account_info(
+            creds_dict,
+            scopes=[
+                'https://www.googleapis.com/auth/presentations',
+                'https://www.googleapis.com/auth/drive'
+            ]
+        )
+        slides_service = build('slides', 'v1', credentials=creds)
+        drive_service = build('drive', 'v3', credentials=creds)
+        return slides_service, drive_service
+    except Exception as e:
+        print(f"Google services error: {e}")
+        return None, None
 
-async def translate_topic(topic):
-    """Simple translation for image search"""
-    translations = {
-        "sun'iy intellekt": "artificial intelligence",
-        "texnologiya": "technology",
-        "ta'lim": "education",
-        "iqtisodiyot": "economy",
-        "tibbiyot": "medicine",
-        "sport": "sport",
-        "kimyo": "chemistry",
-        "fizika": "physics",
-        "biologiya": "biology",
-        "matematik": "mathematics",
-        "tarix": "history",
-        "siyosat": "politics",
-        "ekologiya": "ecology",
-        "arxitektura": "architecture",
-        "san'at": "art",
-        "musiqa": "music",
-        "adabiyot": "literature",
-        "energetika": "energy",
-        "qishloq": "agriculture",
-        "transport": "transport",
-        "kosmос": "space",
-        "internet": "internet",
-        "dasturlash": "programming",
-        "biznes": "business",
-        "moliya": "finance",
-        "bank": "banking",
-    }
-    topic_lower = topic.lower()
-    for uz, en in translations.items():
-        if uz in topic_lower:
-            return en
-    return topic
+async def create_google_slides(title, slides_content, theme_idx, style):
+    """Create professional Google Slides presentation"""
+    
+    slides_service, drive_service = get_google_services()
+    if not slides_service:
+        return None
+    
+    # Color themes - PROFESSIONAL
+    themes = [
+        {"bg": {"red": 0.06, "green": 0.13, "blue": 0.25}, "accent": {"red": 0.20, "green": 0.60, "blue": 0.86}, "text": {"red": 1, "green": 1, "blue": 1}},
+        {"bg": {"red": 0.04, "green": 0.18, "blue": 0.12}, "accent": {"red": 0.15, "green": 0.68, "blue": 0.38}, "text": {"red": 1, "green": 1, "blue": 1}},
+        {"bg": {"red": 0.16, "green": 0.04, "blue": 0.27}, "accent": {"red": 0.61, "green": 0.35, "blue": 0.71}, "text": {"red": 1, "green": 1, "blue": 1}},
+        {"bg": {"red": 0.27, "green": 0.04, "blue": 0.04}, "accent": {"red": 0.91, "green": 0.30, "blue": 0.24}, "text": {"red": 1, "green": 1, "blue": 1}},
+        {"bg": {"red": 0.02, "green": 0.16, "blue": 0.24}, "accent": {"red": 0.10, "green": 0.74, "blue": 0.61}, "text": {"red": 1, "green": 1, "blue": 1}},
+        {"bg": {"red": 0.12, "green": 0.10, "blue": 0.02}, "accent": {"red": 0.95, "green": 0.77, "blue": 0.06}, "text": {"red": 1, "green": 1, "blue": 1}},
+        {"bg": {"red": 0.06, "green": 0.06, "blue": 0.06}, "accent": {"red": 0.78, "green": 0.78, "blue": 0.78}, "text": {"red": 1, "green": 0.84, "blue": 0}},
+        {"bg": {"red": 0.20, "green": 0.10, "blue": 0.04}, "accent": {"red": 0.83, "green": 0.33, "blue": 0}, "text": {"red": 1, "green": 1, "blue": 1}},
+        {"bg": {"red": 0.02, "green": 0.12, "blue": 0.24}, "accent": {"red": 0.16, "green": 0.50, "blue": 0.73}, "text": {"red": 1, "green": 0.84, "blue": 0}},
+        {"bg": {"red": 0.04, "green": 0.16, "blue": 0.12}, "accent": {"red": 0.09, "green": 0.63, "blue": 0.52}, "text": {"red": 1, "green": 1, "blue": 1}},
+    ]
+    
+    theme = themes[theme_idx % len(themes)]
+    
+    try:
+        # 1. Create presentation
+        presentation = slides_service.presentations().create(
+            body={"title": title}
+        ).execute()
+        presentation_id = presentation['presentationId']
+        
+        # 2. Get existing slide ID
+        existing_slide_id = presentation['slides'][0]['objectId']
+        
+        # 3. Build all requests
+        requests = []
+        
+        # Delete default slide
+        requests.append({
+            "deleteObject": {"objectId": existing_slide_id}
+        })
+        
+        # Add slides
+        slide_ids = []
+        for i, (slide_title, slide_text) in enumerate(slides_content):
+            slide_id = f"slide_{i}"
+            title_id = f"title_{i}"
+            body_id = f"body_{i}"
+            accent_id = f"accent_{i}"
+            num_id = f"num_{i}"
+            
+            slide_ids.append(slide_id)
+            
+            # Add slide
+            requests.append({
+                "addSlide": {
+                    "objectId": slide_id,
+                    "slideLayoutReference": {"predefinedLayout": "BLANK"}
+                }
+            })
+            
+            # Background color
+            requests.append({
+                "updatePageProperties": {
+                    "objectId": slide_id,
+                    "pageProperties": {
+                        "pageBackgroundFill": {
+                            "solidFill": {"color": {"rgbColor": theme["bg"]}}
+                        }
+                    },
+                    "fields": "pageBackgroundFill"
+                }
+            })
+            
+            if i == 0:
+                # ===== TITLE SLIDE =====
+                
+                # Bottom accent bar
+                requests.append({
+                    "createShape": {
+                        "objectId": accent_id,
+                        "shapeType": "RECTANGLE",
+                        "elementProperties": {
+                            "pageObjectId": slide_id,
+                            "size": {"width": {"magnitude": 9144000, "unit": "EMU"}, "height": {"magnitude": 900000, "unit": "EMU"}},
+                            "transform": {"scaleX": 1, "scaleY": 1, "translateX": 0, "translateY": 5486400, "unit": "EMU"}
+                        }
+                    }
+                })
+                requests.append({
+                    "updateShapeProperties": {
+                        "objectId": accent_id,
+                        "shapeProperties": {
+                            "shapeBackgroundFill": {"solidFill": {"color": {"rgbColor": theme["accent"]}}},
+                            "outline": {"propertyState": "NOT_RENDERED"}
+                        },
+                        "fields": "shapeBackgroundFill,outline"
+                    }
+                })
+                
+                # Title text box
+                requests.append({
+                    "createShape": {
+                        "objectId": title_id,
+                        "shapeType": "TEXT_BOX",
+                        "elementProperties": {
+                            "pageObjectId": slide_id,
+                            "size": {"width": {"magnitude": 8144000, "unit": "EMU"}, "height": {"magnitude": 2400000, "unit": "EMU"}},
+                            "transform": {"scaleX": 1, "scaleY": 1, "translateX": 500000, "translateY": 1800000, "unit": "EMU"}
+                        }
+                    }
+                })
+                requests.append({
+                    "insertText": {"objectId": title_id, "text": slide_title}
+                })
+                requests.append({
+                    "updateTextStyle": {
+                        "objectId": title_id,
+                        "textRange": {"type": "ALL"},
+                        "style": {
+                            "bold": True,
+                            "fontSize": {"magnitude": 40, "unit": "PT"},
+                            "foregroundColor": {"opaqueColor": {"rgbColor": theme["text"]}}
+                        },
+                        "fields": "bold,fontSize,foregroundColor"
+                    }
+                })
+                requests.append({
+                    "updateParagraphStyle": {
+                        "objectId": title_id,
+                        "textRange": {"type": "ALL"},
+                        "style": {"alignment": "CENTER"},
+                        "fields": "alignment"
+                    }
+                })
+                
+                # Subtitle
+                requests.append({
+                    "createShape": {
+                        "objectId": body_id,
+                        "shapeType": "TEXT_BOX",
+                        "elementProperties": {
+                            "pageObjectId": slide_id,
+                            "size": {"width": {"magnitude": 8144000, "unit": "EMU"}, "height": {"magnitude": 600000, "unit": "EMU"}},
+                            "transform": {"scaleX": 1, "scaleY": 1, "translateX": 500000, "translateY": 5600000, "unit": "EMU"}
+                        }
+                    }
+                })
+                requests.append({
+                    "insertText": {
+                        "objectId": body_id,
+                        "text": f"✦  {style} uslubi  ✦  {datetime.now().strftime('%d.%m.%Y')}  ✦"
+                    }
+                })
+                requests.append({
+                    "updateTextStyle": {
+                        "objectId": body_id,
+                        "textRange": {"type": "ALL"},
+                        "style": {
+                            "bold": True,
+                            "fontSize": {"magnitude": 16, "unit": "PT"},
+                            "foregroundColor": {"opaqueColor": {"rgbColor": theme["bg"]}}
+                        },
+                        "fields": "bold,fontSize,foregroundColor"
+                    }
+                })
+                requests.append({
+                    "updateParagraphStyle": {
+                        "objectId": body_id,
+                        "textRange": {"type": "ALL"},
+                        "style": {"alignment": "CENTER"},
+                        "fields": "alignment"
+                    }
+                })
+                
+            else:
+                # ===== CONTENT SLIDE =====
+                
+                # Left accent bar
+                requests.append({
+                    "createShape": {
+                        "objectId": accent_id,
+                        "shapeType": "RECTANGLE",
+                        "elementProperties": {
+                            "pageObjectId": slide_id,
+                            "size": {"width": {"magnitude": 180000, "unit": "EMU"}, "height": {"magnitude": 6858000, "unit": "EMU"}},
+                            "transform": {"scaleX": 1, "scaleY": 1, "translateX": 0, "translateY": 0, "unit": "EMU"}
+                        }
+                    }
+                })
+                requests.append({
+                    "updateShapeProperties": {
+                        "objectId": accent_id,
+                        "shapeProperties": {
+                            "shapeBackgroundFill": {"solidFill": {"color": {"rgbColor": theme["accent"]}}},
+                            "outline": {"propertyState": "NOT_RENDERED"}
+                        },
+                        "fields": "shapeBackgroundFill,outline"
+                    }
+                })
+                
+                # Header bar
+                header_id = f"header_{i}"
+                requests.append({
+                    "createShape": {
+                        "objectId": header_id,
+                        "shapeType": "RECTANGLE",
+                        "elementProperties": {
+                            "pageObjectId": slide_id,
+                            "size": {"width": {"magnitude": 8964000, "unit": "EMU"}, "height": {"magnitude": 1000000, "unit": "EMU"}},
+                            "transform": {"scaleX": 1, "scaleY": 1, "translateX": 180000, "translateY": 0, "unit": "EMU"}
+                        }
+                    }
+                })
+                requests.append({
+                    "updateShapeProperties": {
+                        "objectId": header_id,
+                        "shapeProperties": {
+                            "shapeBackgroundFill": {
+                                "solidFill": {
+                                    "color": {"rgbColor": {
+                                        "red": min(theme["bg"]["red"] + 0.08, 1),
+                                        "green": min(theme["bg"]["green"] + 0.08, 1),
+                                        "blue": min(theme["bg"]["blue"] + 0.08, 1)
+                                    }}
+                                }
+                            },
+                            "outline": {"propertyState": "NOT_RENDERED"}
+                        },
+                        "fields": "shapeBackgroundFill,outline"
+                    }
+                })
+                
+                # Slide number circle
+                requests.append({
+                    "createShape": {
+                        "objectId": num_id,
+                        "shapeType": "ELLIPSE",
+                        "elementProperties": {
+                            "pageObjectId": slide_id,
+                            "size": {"width": {"magnitude": 500000, "unit": "EMU"}, "height": {"magnitude": 500000, "unit": "EMU"}},
+                            "transform": {"scaleX": 1, "scaleY": 1, "translateX": 8544000, "translateY": 200000, "unit": "EMU"}
+                        }
+                    }
+                })
+                requests.append({
+                    "updateShapeProperties": {
+                        "objectId": num_id,
+                        "shapeProperties": {
+                            "shapeBackgroundFill": {"solidFill": {"color": {"rgbColor": theme["accent"]}}},
+                            "outline": {"propertyState": "NOT_RENDERED"}
+                        },
+                        "fields": "shapeBackgroundFill,outline"
+                    }
+                })
+                requests.append({
+                    "insertText": {"objectId": num_id, "text": str(i)}
+                })
+                requests.append({
+                    "updateTextStyle": {
+                        "objectId": num_id,
+                        "textRange": {"type": "ALL"},
+                        "style": {
+                            "bold": True,
+                            "fontSize": {"magnitude": 18, "unit": "PT"},
+                            "foregroundColor": {"opaqueColor": {"rgbColor": {"red": 1, "green": 1, "blue": 1}}}
+                        },
+                        "fields": "bold,fontSize,foregroundColor"
+                    }
+                })
+                requests.append({
+                    "updateParagraphStyle": {
+                        "objectId": num_id,
+                        "textRange": {"type": "ALL"},
+                        "style": {"alignment": "CENTER"},
+                        "fields": "alignment"
+                    }
+                })
+                
+                # Title
+                requests.append({
+                    "createShape": {
+                        "objectId": title_id,
+                        "shapeType": "TEXT_BOX",
+                        "elementProperties": {
+                            "pageObjectId": slide_id,
+                            "size": {"width": {"magnitude": 8500000, "unit": "EMU"}, "height": {"magnitude": 800000, "unit": "EMU"}},
+                            "transform": {"scaleX": 1, "scaleY": 1, "translateX": 250000, "translateY": 100000, "unit": "EMU"}
+                        }
+                    }
+                })
+                requests.append({
+                    "insertText": {"objectId": title_id, "text": slide_title}
+                })
+                requests.append({
+                    "updateTextStyle": {
+                        "objectId": title_id,
+                        "textRange": {"type": "ALL"},
+                        "style": {
+                            "bold": True,
+                            "fontSize": {"magnitude": 26, "unit": "PT"},
+                            "foregroundColor": {"opaqueColor": {"rgbColor": theme["text"]}}
+                        },
+                        "fields": "bold,fontSize,foregroundColor"
+                    }
+                })
+                
+                # Underline accent
+                underline_id = f"underline_{i}"
+                requests.append({
+                    "createShape": {
+                        "objectId": underline_id,
+                        "shapeType": "RECTANGLE",
+                        "elementProperties": {
+                            "pageObjectId": slide_id,
+                            "size": {"width": {"magnitude": 3000000, "unit": "EMU"}, "height": {"magnitude": 50000, "unit": "EMU"}},
+                            "transform": {"scaleX": 1, "scaleY": 1, "translateX": 250000, "translateY": 1000000, "unit": "EMU"}
+                        }
+                    }
+                })
+                requests.append({
+                    "updateShapeProperties": {
+                        "objectId": underline_id,
+                        "shapeProperties": {
+                            "shapeBackgroundFill": {"solidFill": {"color": {"rgbColor": theme["accent"]}}},
+                            "outline": {"propertyState": "NOT_RENDERED"}
+                        },
+                        "fields": "shapeBackgroundFill,outline"
+                    }
+                })
+                
+                # Content
+                requests.append({
+                    "createShape": {
+                        "objectId": body_id,
+                        "shapeType": "TEXT_BOX",
+                        "elementProperties": {
+                            "pageObjectId": slide_id,
+                            "size": {"width": {"magnitude": 8600000, "unit": "EMU"}, "height": {"magnitude": 5200000, "unit": "EMU"}},
+                            "transform": {"scaleX": 1, "scaleY": 1, "translateX": 250000, "translateY": 1150000, "unit": "EMU"}
+                        }
+                    }
+                })
+                
+                # Format content as bullet points
+                bullets = []
+                for sent in slide_text.replace(";", ".").split("."):
+                    sent = sent.strip()
+                    if sent and len(sent) > 8:
+                        bullets.append(f"◆  {sent}")
+                
+                content_text = "\n".join(bullets[:6])
+                requests.append({
+                    "insertText": {"objectId": body_id, "text": content_text}
+                })
+                requests.append({
+                    "updateTextStyle": {
+                        "objectId": body_id,
+                        "textRange": {"type": "ALL"},
+                        "style": {
+                            "fontSize": {"magnitude": 17, "unit": "PT"},
+                            "foregroundColor": {"opaqueColor": {"rgbColor": {
+                                "red": 0.85, "green": 0.90, "blue": 0.95
+                            }}}
+                        },
+                        "fields": "fontSize,foregroundColor"
+                    }
+                })
+                requests.append({
+                    "updateParagraphStyle": {
+                        "objectId": body_id,
+                        "textRange": {"type": "ALL"},
+                        "style": {"lineSpacing": 150, "spaceAbove": {"magnitude": 8, "unit": "PT"}},
+                        "fields": "lineSpacing,spaceAbove"
+                    }
+                })
+        
+        # Execute all requests
+        slides_service.presentations().batchUpdate(
+            presentationId=presentation_id,
+            body={"requests": requests}
+        ).execute()
+        
+        # Make file accessible
+        drive_service.permissions().create(
+            fileId=presentation_id,
+            body={"type": "anyone", "role": "reader"}
+        ).execute()
+        
+        # Export as PPTX
+        export_url = f"https://docs.google.com/presentation/d/{presentation_id}/export/pptx"
+        
+        creds_dict = json.loads(GOOGLE_CREDENTIALS)
+        creds = service_account.Credentials.from_service_account_info(
+            creds_dict,
+            scopes=['https://www.googleapis.com/auth/drive']
+        )
+        
+        request = drive_service.files().export_media(
+            fileId=presentation_id,
+            mimeType='application/vnd.openxmlformats-officedocument.presentationml.presentation'
+        )
+        
+        buffer = BytesIO()
+        downloader = MediaIoBaseDownload(buffer, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        
+        # Delete from Drive after download
+        drive_service.files().delete(fileId=presentation_id).execute()
+        
+        buffer.seek(0)
+        return buffer
+        
+    except Exception as e:
+        print(f"Google Slides error: {e}")
+        return None
 
 # ===================== AI CONTENT =====================
 
@@ -94,10 +482,10 @@ async def generate_with_gemini(prompt):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2048}
+            "generationConfig": {"temperature": 0.7, "maxOutputTokens": 3000}
         }
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=50)) as resp:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=60)) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     return data["candidates"][0]["content"]["parts"][0]["text"]
@@ -105,164 +493,32 @@ async def generate_with_gemini(prompt):
         pass
     return None
 
-async def generate_slide_content(topic, slide_count, style):
-    prompt = f"""Sen O'zbekiston universitetining eng yaxshi o'qituvchisisan.
-"{topic}" mavzusida {slide_count} ta PROFESSIONAL SLAYD uchun BATAFSIL mazmun yarat.
+async def generate_slides(topic, slide_count, style):
+    prompt = f"""Sen O'zbekistonning eng yaxshi akademik mutaxassisisan.
+"{topic}" mavzusida {slide_count} ta professional slayd uchun BATAFSIL va REAL ma'lumotlar yoz.
 
-QOIDA: Har bir slayd uchun 4-6 ta muhim nuqta yoz. Har bir nuqta 2-3 jumladan iborat bo'lsin.
-Uslub: {style}
-TIL: Faqat O'zbekcha
+MUHIM: Faqat HAQIQIY faktlar, sanalar, raqamlar va dalillar ishlat!
 
-FORMAT (aniq shunday yoz):
+FORMAT (aniq):
 ===SLAYD_1===
 SARLAVHA: {topic}
-MAZMUN: Bu prezentatsiya {topic} mavzusini chuqur tahlil qiladi. Mavzuning barcha muhim jihatlari ko'rib chiqiladi. Tinglovchilar yangi bilim va ko'nikmalar egallaydi.
+MAZMUN: Qisqacha kirish jumlasi.
 
 ===SLAYD_2===
-SARLAVHA: Mavzuga umumiy kirish
-MAZMUN: {topic} bugungi kunda juda dolzarb mavzu hisoblanadi. Bu soha tez sur'atlar bilan rivojlanmoqda va yangi imkoniyatlar yaratmoqda. Uni o'rganish har bir mutaxassis uchun zaruriy ehtiyojga aylandi.
+SARLAVHA: Mavzuga kirish
+MAZMUN: Batafsil tushuntirish, real faktlar bilan.
 
-===SLAYD_3===
-SARLAVHA: Tarixiy rivojlanish
-MAZMUN: {topic} ning tarixi bir necha asrlar oldin boshlangan. Dastlabki bosqichlarda oddiy shaklda bo'lgan bu soha, fan va texnikaning rivojlanishi bilan murakkab tizimga aylandi. Muhim tarixiy voqealar bu sohaning bugungi qiyofasini belgiladi.
+(va hokazo {slide_count} ta slaydgacha)
 
-===SLAYD_4===
-SARLAVHA: Asosiy tushunchalar va ta'riflar
-MAZMUN: {topic} sohasida bir qator asosiy tushunchalar mavjud. Ularni to'g'ri tushunish sohani chuqur o'rganish uchun poydevor yaratadi. Mutaxassislar bu tushunchalarni keng qo'llaydilar.
-
-===SLAYD_5===
-SARLAVHA: Afzalliklari va imkoniyatlari
-MAZMUN: {topic} ning asosiy afzalliklari: samaradorlikni oshirish, resurslarni tejash, yangi imkoniyatlar yaratish va raqobatbardoshlikni ta'minlash. Bu afzalliklar uni boshqa sohalardan ajratib turadi.
-
-===SLAYD_6===
-SARLAVHA: Muammolar va yechimlar
-MAZMUN: Har qanday sohada bo'lgani kabi, {topic} da ham muammolar mavjud. Asosiy to'siqlar: moliyalashtirish, kadrlar va texnik cheklovlar. Biroq, zamonaviy yondashuv va innovatsiyalar orqali bu muammolar hal etilmoqda.
-
-===SLAYD_7===
-SARLAVHA: Jahon tajribasi
-MAZMUN: Dunyoning rivojlangan mamlakatlari {topic} sohasida ulkan yutuqlarga erishgan. AQSH, Germaniya, Yaponiya va Xitoy bu sohada yetakchi o'rinlarda turadi. Ularning tajribasi boshqa mamlakatlar uchun muhim ibrat manbai.
-
-===SLAYD_8===
-SARLAVHA: O'zbekistonda rivojlanish
-MAZMUN: O'zbekistonda {topic} sohasida jadal rivojlanish kuzatilmoqda. Prezident Mirziyoyev rahbarligida qabul qilingan dasturlar bu sohaga yangi turtki berdi. Yangi loyihalar va sarmoyalar natijasida soha yanada o'smoqda.
-
-===SLAYD_9===
-SARLAVHA: Kelajak istiqbollari
-MAZMUN: {topic} sohasining kelajagi juda porloq. Yangi texnologiyalar joriy etilishi bilan soha yanada rivojlanadi. 2030 yilga kelib bu soha milliy iqtisodiyotda muhim o'rin egallaydi deb kutilmoqda.
-
-===SLAYD_10===
-SARLAVHA: Xulosa va tavsiyalar
-MAZMUN: {topic} mavzusini o'rganish juda muhim va zarur ekan. Ushbu prezentatsiya asosiy jihatlarni qamrab oldi. Barcha soha vakillari, tadqiqotchilar va talabalar bu bilimlarni amaliyotda qo'llashlari tavsiya etiladi.
-
-Agar {slide_count} > 10 bo'lsa, qo'shimcha slaydlar ham shu formatda qo'sh."""
+Uslub: {style} | TIL: Faqat O'zbekcha
+Har bir slayd uchun 3-5 ta real va muhim fakt."""
 
     result = await generate_with_gemini(prompt)
     if result and "===SLAYD_" in result:
-        return result
-    return generate_rich_fallback(topic, slide_count)
+        return parse_slides_content(result, topic, slide_count)
+    return get_fallback_slides(topic, slide_count)
 
-def generate_rich_fallback(topic, slide_count):
-    slides = [
-        f"===SLAYD_1===\nSARLAVHA: {topic}\nMAZMUN: Ushbu prezentatsiya {topic} mavzusining barcha muhim jihatlarini qamrab oladi. Zamonaviy ilm-fan va amaliyot nuqtai nazaridan tahlil qilinadi. Tinglovchilar uchun foydali va qiziqarli ma'lumotlar taqdim etiladi.",
-        f"===SLAYD_2===\nSARLAVHA: {topic} nima?\nMAZMUN: {topic} - bu zamonaviy dunyoda alohida o'rin egallagan muhim soha. Uning ta'rifi bir necha nuqtai nazardan berilishi mumkin. Turli olimlar va mutaxassislar bu tushunchaga o'ziga xos yondashuv bilan qaraydilar.",
-        f"===SLAYD_3===\nSARLAVHA: Rivojlanish bosqichlari\nMAZMUN: {topic} ning rivojlanish tarixi qiziqarli va murakkab. Birinchi bosqich - dastlabki kashfiyotlar va nazariyalar. Ikkinchi bosqich - amaliyotga joriy etish. Uchinchi bosqich - zamonaviy rivojlanish va innovatsiyalar.",
-        f"===SLAYD_4===\nSARLAVHA: Asosiy xususiyatlar\nMAZMUN: {topic} ning 5 ta asosiy xususiyati: 1) Yuqori samaradorlik; 2) Keng qo'llanilish doirasi; 3) Doimiy takomillashuv; 4) Iqtisodiy foydaliligi; 5) Ijtimoiy ahamiyati. Bu xususiyatlar uni boshqa sohalardan farqlaydi.",
-        f"===SLAYD_5===\nSARLAVHA: Afzalliklari\nMAZMUN: {topic} ning asosiy afzalliklari: ish unumdorligini 40-60% ga oshiradi. Vaqt va moliyaviy resurslarni tejaydi. Yangi ish o'rinlari yaratadi. Xalqaro raqobatbardoshlikni ta'minlaydi. Innovatsion rivojlanishga zamin hozirlaydi.",
-        f"===SLAYD_6===\nSARLAVHA: Muammolar va yechimlar\nMAZMUN: Asosiy muammolar: malakali kadrlar tanqisligi (yechim: ta'lim tizimini isloh qilish), moliyalashtirish yetishmasligi (yechim: xususiy-davlat hamkorligi), texnik cheklovlar (yechim: zamonaviy infratuzilma). Har bir muammoning aniq yechimi mavjud.",
-        f"===SLAYD_7===\nSARLAVHA: Statistika va raqamlar\nMAZMUN: Jahon bo'yicha {topic} sohasiga har yili 500+ mlrd dollar sarmoya kiritiladi. So'nggi 5 yilda soha 35% ga o'sdi. 2025 yilga kelib 10 mln yangi ish o'rini yaratiladi. O'zbekistonda so'nggi yil 25% o'sish qayd etildi.",
-        f"===SLAYD_8===\nSARLAVHA: O'zbekistonda holat\nMAZMUN: O'zbekistonda {topic} rivojlantirishga 2 trln so'm ajratilgan. 15 ta yangi loyiha amalga oshirilmoqda. 5000 dan ortiq mutaxassis tayyorlandi. Xalqaro hamkorlar: Koreya, Germaniya, Xitoy. 2026 yilga qadar yanada kengayishi rejalashtirilgan.",
-        f"===SLAYD_9===\nSARLAVHA: Kelajak\nMAZMUN: {topic} ning kelajagi: 2025-2030 yillarda 3 barobar o'sish kutilmoqda. Sun'iy intellekt va raqamlashtirish yangi imkoniyatlar ochadi. Yosh mutaxassislar uchun katta istiqbollar. Innovatsion startaplar ko'payadi. Global bozorda O'zbekistonning ulushi oshadi.",
-        f"===SLAYD_10===\nSARLAVHA: Xulosa\nMAZMUN: {topic} - kelajak sohasi. Asosiy xulosalar: 1) Soha jadal rivojlanmoqda; 2) O'zbekiston yaxshi imkoniyatlarga ega; 3) Yoshlar uchun istiqbolli karera; 4) Davlat tomonidan qo'llab-quvvatlanmoqda. Birgalikda kelajakni quramiz!",
-    ]
-
-    extra_slides = [
-        f"===SLAYD_11===\nSARLAVHA: Amaliy misol\nMAZMUN: {topic} ning real hayotdagi misollari: Toshkent shahrida muvaffaqiyatli loyiha amalga oshirildi. Natijada iqtisodiy samara 150% ga oshdi. Xalqaro ekspertlar yuqori baho berdi. Bu tajriba boshqa viloyatlarda ham qo'llanilmoqda.",
-        f"===SLAYD_12===\nSARLAVHA: Tavsiyalar\nMAZMUN: Mutaxassislar uchun: doimo yangiliklarga e'tibor bering. Yoshlar uchun: bu sohada tahsil oling. Tadbirkorlar uchun: investitsiya qiling. Davlat uchun: qulayroq sharoit yarating. Hamkorlik va innovatsiya - muvaffaqiyat kaliti.",
-        f"===SLAYD_13===\nSARLAVHA: Xalqaro hamkorlik\nMAZMUN: {topic} sohasida xalqaro hamkorlik juda muhim. O'zbekiston 25+ davlat bilan hamkorlik shartnomasi imzolagan. Xalqaro tashkilotlar: UN, WB, ADB qo'llab-quvvatlaydi. Birgalikda amalga oshirilayotgan loyihalar soni oshmoqda.",
-        f"===SLAYD_14===\nSARLAVHA: Yoshlar va ta'lim\nMAZMUN: {topic} sohasida yoshlar uchun katta imkoniyatlar mavjud. 50+ universitet bu yo'nalishda mutaxassislar tayyorlaydi. Stipendiya va grantlar berilmoqda. Stajировка va amaliyot dasturlari kengaytirilmoqda. Yoshlar - kelajak sohasi yetakchilari.",
-        f"===SLAYD_15===\nSARLAVHA: E'tiboringiz uchun rahmat!\nMAZMUN: Savollar va muhokama uchun vaqt. Ushbu prezentatsiya {topic} mavzusini to'liq qamrab oldi deb umid qilamiz. Qo'shimcha ma'lumot uchun murojaat qilishingiz mumkin. Birgalikda O'zbekistonni rivojlantiramiz!",
-    ]
-
-    all_slides = slides + extra_slides
-    return "\n\n".join(all_slides[:slide_count])
-
-async def generate_doc_content(topic, doc_type, style):
-    doc_names = {"referat": "Referat", "kurs": "Kurs ishi", "maqola": "Ilmiy maqola"}
-    prompt = f"""O'zbek tili va adabiyoti bo'yicha professor darajasida "{topic}" mavzusida {doc_names.get(doc_type, 'hujjat')} yoz.
-Uslub: {style} | Hajm: 800-1200 so'z | TIL: Faqat O'zbekcha
-
-Tuzilma:
-KIRISH
-ASOSIY QISM
-1. {topic} ning nazariy asoslari
-2. Amaliy jihatlar
-3. Muammolar va yechimlar
-4. Zamonaviy tendensiyalar
-XULOSA
-ADABIYOTLAR (5 ta)"""
-
-    result = await generate_with_gemini(prompt)
-    if result:
-        return result
-    return f"""KIRISH
-
-{topic} - zamonaviy fan va amaliyotda muhim o'rin egallagan dolzarb mavzu. Ushbu {doc_names.get(doc_type, 'hujjat')} da mavzuning asosiy jihatlari ilmiy asosda tahlil qilinadi.
-
-Mavzuning dolzarbligi shundaki, bugungi globallashuv sharoitida {topic} sohasida bilim va ko'nikmaga ega bo'lish har bir mutaxassis uchun zaruriy talabga aylanib bormoqda.
-
-ASOSIY QISM
-
-1. {topic.upper()} NING NAZARIY ASOSLARI
-
-{topic} tushunchasi ilmiy adabiyotlarda turlicha ta'riflanadi. Ko'pchilik olimlar uni murakkab tizim sifatida baholaydi. Bu sohaning nazariy poydevori bir necha asrlar davomida shakllanib kelgan.
-
-Asosiy nazariy yondashuvlar: tizimli tahlil, tarixiy taqqoslash va empirik tadqiqot metodlari. Har biri o'ziga xos afzallik va kamchiliklarga ega.
-
-2. AMALIY JIHATLAR
-
-{topic} ning amaliyotdagi qo'llanilishi juda keng. Sanoat, ta'lim, tibbiyot, transport va boshqa ko'plab sohalarda faol foydalanilmoqda.
-
-Amaliy samaradorlik ko'rsatkichlari: unumdorlik 35-50% ga oshadi, xarajatlar 20-30% ga kamayadi, sifat ko'rsatkichlari sezilarli yaxshilanadi.
-
-3. MUAMMOLAR VA YECHIMLAR
-
-Asosiy muammolar:
-• Malakali kadrlar yetishmasligi — yechim: maqsadli ta'lim dasturlari
-• Moliyaviy resurslar tanqisligi — yechim: xususiy-davlat sherikchiligi
-• Texnik infratuzilma kamchiligi — yechim: xalqaro investitsiyalar
-
-4. ZAMONAVIY TENDENSIYALAR
-
-Jahon miqyosida {topic} sohasida bir necha asosiy tendensiyalar kuzatilmoqda:
-• Raqamlashtirish va avtomatlashtirish
-• Sun'iy intellektni qo'llash
-• Barqarorli rivojlanish tamoyillari
-• Xalqaro integratsiya va hamkorlik
-
-O'zbekistonda ushbu tendensiyalar "Yangi O'zbekiston" strategiyasi doirasida muvaffaqiyatli amalga oshirilmoqda.
-
-XULOSA
-
-{topic} mavzusini chuqur o'rganish quyidagi muhim xulosalarga olib keldi:
-
-1. Soha jadal rivojlanmoqda va kelajakda yanada muhim o'rin egallaydi
-2. O'zbekistonda bu soha uchun qulay sharoit va imkoniyatlar mavjud
-3. Kadrlar tayyorlash va innovatsiyalarga e'tibor berish kerak
-4. Xalqaro hamkorlik va tajriba almashinuvi zarur
-
-ADABIYOTLAR RO'YXATI
-
-1. Mirziyoyev Sh.M. Yangi O'zbekiston strategiyasi. — T.: O'zbekiston, 2021. — 280 b.
-2. Karimov I.A. O'zbekiston XXI asrga intilmoqda. — T.: O'zbekiston, 2019. — 320 b.
-3. {topic} bo'yicha xalqaro tadqiqotlar to'plami. — M.: Nauka, 2022. — 450 b.
-4. O'zbekiston Respublikasi Prezidentining PQ-4861 son qarori. — T., 2023.
-5. UNESCO. Global Education Report 2023. — Paris: UNESCO, 2023. — 200 p.
-
-Sana: {datetime.now().strftime('%d.%m.%Y')} | Uslub: {style}"""
-
-# ===================== PPTX CREATOR =====================
-
-def parse_slides(content, slide_count):
+def parse_slides_content(content, topic, slide_count):
     slides = []
     parts = content.split("===SLAYD_")
     for part in parts[1:]:
@@ -276,223 +532,96 @@ def parse_slides(content, slide_count):
                 text = line.replace("MAZMUN:", "").strip()
         if title:
             slides.append((title, text))
-    return slides[:slide_count] if slides else [("Mavzu", content[:300])]
+    return slides[:slide_count] if slides else [(topic, "Ma'lumot")]
 
-# 10 PROFESSIONAL THEMES
-THEMES = [
-    {"name":"🔵 Ko'k Premium", "bg":(15,32,65), "accent":(52,152,219), "title":(255,255,255), "text":(210,230,255), "sub":(100,180,255)},
-    {"name":"🟢 Yashil Natura", "bg":(10,45,30), "accent":(39,174,96), "title":(255,255,255), "text":(200,240,215), "sub":(100,220,150)},
-    {"name":"🟣 Binafsha Royal", "bg":(40,10,70), "accent":(155,89,182), "title":(255,255,255), "text":(230,210,250), "sub":(180,130,230)},
-    {"name":"🔴 Qizil Dinamik", "bg":(70,10,10), "accent":(231,76,60), "title":(255,255,255), "text":(255,210,205), "sub":(255,140,130)},
-    {"name":"🩵 Moviy Ocean", "bg":(5,40,60), "accent":(26,188,156), "title":(255,255,255), "text":(200,245,240), "sub":(100,230,210)},
-    {"name":"🟡 Oltin Biznes", "bg":(30,25,5), "accent":(241,196,15), "title":(255,255,255), "text":(255,240,180), "sub":(255,215,80)},
-    {"name":"⚫ Qora Elegant", "bg":(15,15,15), "accent":(200,200,200), "title":(255,215,0), "text":(220,220,220), "sub":(180,180,180)},
-    {"name":"🟤 Jigarrang", "bg":(50,25,10), "accent":(211,84,0), "title":(255,255,255), "text":(255,220,190), "sub":(255,160,100)},
-    {"name":"🌊 Dengiz", "bg":(5,30,60), "accent":(41,128,185), "title":(255,215,0), "text":(200,235,255), "sub":(130,200,255)},
-    {"name":"🌿 Nefrit", "bg":(10,40,30), "accent":(22,160,133), "title":(255,255,255), "text":(200,240,230), "sub":(80,200,170)},
-]
+def get_fallback_slides(topic, slide_count):
+    base = [
+        (topic, f"Ushbu prezentatsiya {topic} mavzusining barcha muhim jihatlarini qamrab oladi. Professional va akademik yondashuv asosida tayyorlangan."),
+        (f"{topic} haqida", f"{topic} - zamonaviy fanda muhim o'rin egallaydi. Bu soha jadal rivojlanmoqda va yangi imkoniyatlar yaratmoqda."),
+        ("Tarixiy rivojlanish", f"{topic} ning tarixi uzoq o'tmishga ega. Har bir davr o'zining muhim kashfiyotlari va yutuqlari bilan ajralib turadi."),
+        ("Asosiy tushunchalar", f"{topic} sohasidagi asosiy tushunchalar va terminlar. Ularni to'g'ri tushunish sohani chuqur o'rganish uchun zarur."),
+        ("Afzalliklari", f"{topic} ning asosiy afzalliklari: samaradorlik, keng qo'llanilish, tejamkorlik va innovatsion rivojlanish imkoniyati."),
+        ("Muammolar va yechimlar", f"{topic} sohasidagi asosiy muammolar va ularni hal qilish yo'llari. Zamonaviy yondashuvlar samarali natijalar bermoqda."),
+        ("Jahon tajribasi", f"Dunyoning yetakchi mamlakatlari {topic} sohasida katta yutuqlarga erishgan. Ularning tajribasi o'rganishga arziydi."),
+        ("O'zbekistonda", f"O'zbekistonda {topic} rivojlantirishga alohida e'tibor qaratilmoqda. Yangi dasturlar va loyihalar amalga oshirilmoqda."),
+        ("Kelajak", f"{topic} ning kelajagi juda istiqbolli. Yangi texnologiyalar bu sohani yanada rivojlantiradi."),
+        ("Xulosa", f"{topic} - kelajak sohasi. Barcha asosiy jihatlar ko'rib chiqildi. Bilimlarni amaliyotda qo'llash tavsiya etiladi."),
+        ("Statistika", f"{topic} bo'yicha muhim raqamlar va ko'rsatkichlar. So'nggi yillarda sezilarli o'sish kuzatilgan."),
+        ("Amaliy misol", f"{topic} ning real hayotdagi qo'llanilishi. Muvaffaqiyatli loyihalar va ularning natijalari."),
+        ("Tavsiyalar", f"{topic} sohasida muvaffaqiyatga erishish uchun asosiy tavsiyalar. Mutaxassislar va yoshlar uchun yo'l-yo'riqlar."),
+        ("Hamkorlik", f"{topic} sohasida xalqaro hamkorlik. Birgalikda erishilgan yutuqlar va kelajak rejalari."),
+        ("E'tiboringiz uchun rahmat!", f"Savollar va muhokama uchun vaqt. Ushbu prezentatsiya {topic} mavzusini to'liq qamrab oldi."),
+    ]
+    return base[:slide_count]
 
-async def create_pptx_with_images(title, content, style, slide_count, theme_idx, topic):
-    prs = Presentation()
-    prs.slide_width = Inch(13.33)
-    prs.slide_height = Inch(7.5)
+async def generate_doc(topic, doc_type, style):
+    doc_names = {"referat": "Referat", "kurs": "Kurs ishi", "maqola": "Ilmiy maqola"}
+    prompt = f"""O'zbek tilida "{topic}" mavzusida {doc_names.get(doc_type, 'hujjat')} yoz.
+Uslub: {style} | Hajm: 800-1000 so'z
+FAQAT HAQIQIY faktlar, sanalar, raqamlar!
 
-    slides_data = parse_slides(content, slide_count)
-    theme = THEMES[theme_idx % len(THEMES)]
+Tuzilma:
+KIRISH
+ASOSIY QISM
+1. Nazariy asoslar
+2. Amaliy jihatlar  
+3. Muammolar va yechimlar
+XULOSA
+ADABIYOTLAR (5 ta real manba)"""
 
-    # Get background image
-    topic_en = await translate_topic(topic)
+    result = await generate_with_gemini(prompt)
+    if result:
+        return result
+    return f"""KIRISH
 
-    for i, (slide_title, slide_text) in enumerate(slides_data):
-        slide = prs.slides.add_slide(prs.slide_layouts[6])
+{topic} bugungi kunda muhim ahamiyat kasb etuvchi mavzu hisoblanadi.
 
-        # Try to get image for this slide
-        img_data = None
-        if i > 0:
-            try:
-                slide_en = await translate_topic(slide_title)
-                img_data = await get_topic_image(f"{topic_en} {slide_en}")
-            except:
-                pass
+ASOSIY QISM
 
-        # Background
-        bg = slide.background.fill
-        bg.solid()
-        bg.fore_color.rgb = PRGB(*theme["bg"])
+1. NAZARIY ASOSLAR
 
-        if i == 0:
-            # ===== TITLE SLIDE =====
-            # Full background image with overlay
-            if img_data:
-                try:
-                    img_data.seek(0)
-                    slide.shapes.add_picture(img_data, Inch(0), Inch(0), Inch(13.33), Inch(7.5))
-                    # Dark overlay
-                    overlay = slide.shapes.add_shape(1, Inch(0), Inch(0), Inch(13.33), Inch(7.5))
-                    overlay.fill.solid()
-                    overlay.fill.fore_color.rgb = PRGB(*theme["bg"])
-                    overlay.fill.fore_color.theme_color = None
-                    from pptx.util import Pt as PPt2
-                    overlay.fill.transparency = 0.3
-                    overlay.line.fill.background()
-                except:
-                    pass
+{topic} sohasining nazariy poydevori ko'p yillar davomida shakllanib kelgan.
 
-            # Bottom gradient bar
-            bar = slide.shapes.add_shape(1, Inch(0), Inch(6.2), Inch(13.33), Inch(1.3))
-            bar.fill.solid()
-            bar.fill.fore_color.rgb = PRGB(*theme["accent"])
-            bar.line.fill.background()
+2. AMALIY JIHATLAR
 
-            # Main title
-            tb = slide.shapes.add_textbox(Inch(0.8), Inch(1.8), Inch(11.5), Inch(3))
-            tf = tb.text_frame
-            tf.word_wrap = True
-            p = tf.paragraphs[0]
-            p.text = slide_title
-            p.font.size = PPt(50)
-            p.font.bold = True
-            p.font.color.rgb = PRGB(255, 255, 255)
-            p.alignment = PP_ALIGN.CENTER
+{topic} amaliyotda keng qo'llaniladi va ijobiy natijalar bermoqda.
 
-            # Subtitle bar
-            sb = slide.shapes.add_textbox(Inch(0.8), Inch(6.3), Inch(11.5), Inch(0.8))
-            sf = sb.text_frame
-            sp = sf.paragraphs[0]
-            sp.text = f"✦  {style} uslubi  ✦  {datetime.now().strftime('%d.%m.%Y')}  ✦  {slide_count} ta slayd  ✦"
-            sp.font.size = PPt(16)
-            sp.font.bold = True
-            sp.font.color.rgb = PRGB(*theme["bg"])
-            sp.alignment = PP_ALIGN.CENTER
+3. MUAMMOLAR VA YECHIMLAR
 
-        else:
-            # ===== CONTENT SLIDE =====
+Mavjud muammolarni hal qilish uchun kompleks yondashuv zarur.
 
-            if img_data:
-                try:
-                    img_data.seek(0)
-                    # Image on right side
-                    slide.shapes.add_picture(img_data, Inch(8.5), Inch(1.3), Inch(4.7), Inch(5.8))
-                    # Image overlay
-                    img_overlay = slide.shapes.add_shape(1, Inch(8.5), Inch(1.3), Inch(4.7), Inch(5.8))
-                    img_overlay.fill.solid()
-                    img_overlay.fill.fore_color.rgb = PRGB(*theme["bg"])
-                    img_overlay.fill.transparency = 0.5
-                    img_overlay.line.fill.background()
-                except:
-                    pass
+XULOSA
 
-            # Left accent bar
-            lbar = slide.shapes.add_shape(1, Inch(0), Inch(0), Inch(0.12), Inch(7.5))
-            lbar.fill.solid()
-            lbar.fill.fore_color.rgb = PRGB(*theme["accent"])
-            lbar.line.fill.background()
+{topic} kelajakda yanada rivojlanib boradi.
 
-            # Top header bar
-            hbar = slide.shapes.add_shape(1, Inch(0.12), Inch(0), Inch(13.21), Inch(1.2))
-            hbar.fill.solid()
-            hbar.fill.fore_color.rgb = PRGB(theme["bg"][0]+15, theme["bg"][1]+15, theme["bg"][2]+15)
-            hbar.line.fill.background()
-
-            # Title in header
-            ttb = slide.shapes.add_textbox(Inch(0.3), Inch(0.1), Inch(12), Inch(1))
-            ttf = ttb.text_frame
-            ttp = ttf.paragraphs[0]
-            ttp.text = slide_title
-            ttp.font.size = PPt(28)
-            ttp.font.bold = True
-            ttp.font.color.rgb = PRGB(*theme["title"])
-
-            # Accent line under title
-            aline = slide.shapes.add_shape(1, Inch(0.3), Inch(1.2), Inch(5), Emu(35000))
-            aline.fill.solid()
-            aline.fill.fore_color.rgb = PRGB(*theme["accent"])
-            aline.line.fill.background()
-
-            # Slide number
-            num_box = slide.shapes.add_shape(9, Inch(12.55), Inch(0.25), Inch(0.6), Inch(0.6))
-            num_box.fill.solid()
-            num_box.fill.fore_color.rgb = PRGB(*theme["accent"])
-            num_box.line.fill.background()
-
-            nb = slide.shapes.add_textbox(Inch(12.55), Inch(0.25), Inch(0.6), Inch(0.6))
-            nf = nb.text_frame
-            np_ = nf.paragraphs[0]
-            np_.text = str(i)
-            np_.font.size = PPt(16)
-            np_.font.bold = True
-            np_.font.color.rgb = PRGB(255, 255, 255)
-            np_.alignment = PP_ALIGN.CENTER
-
-            # Content area (left 8 inches if image, full if no image)
-            content_width = Inch(7.8) if img_data else Inch(12.5)
-
-            ctb = slide.shapes.add_textbox(Inch(0.3), Inch(1.4), content_width, Inch(5.7))
-            ctf = ctb.text_frame
-            ctf.word_wrap = True
-
-            # Split into bullet points
-            sentences = []
-            for s in slide_text.replace(";", ".").split("."):
-                s = s.strip()
-                if s and len(s) > 8:
-                    sentences.append(s)
-
-            first = True
-            for j, sent in enumerate(sentences[:6]):
-                if first:
-                    cp = ctf.paragraphs[0]
-                    first = False
-                else:
-                    cp = ctf.add_paragraph()
-
-                # Alternating bullet colors
-                bullet_colors = [theme["accent"], theme["sub"], theme["text"]]
-                bullet_color = bullet_colors[j % 3]
-
-                cp.text = f"  ◆  {sent}"
-                cp.font.size = PPt(17)
-                cp.font.color.rgb = PRGB(*theme["text"])
-                cp.space_after = PPt(10)
-
-    buffer = BytesIO()
-    prs.save(buffer)
-    buffer.seek(0)
-    return buffer
+ADABIYOTLAR
+1. Mirziyoyev Sh.M. Yangi O'zbekiston strategiyasi. T.: 2021.
+2. UNESCO Global Report 2023.
+3. O'zbekiston milliy ensiklopediyasi. T.: 2020."""
 
 def create_pdf(title, content, style, doc_type):
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4,
-                           topMargin=2*cm, bottomMargin=2*cm,
-                           leftMargin=2.5*cm, rightMargin=2.5*cm)
+    doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=2*cm, bottomMargin=2*cm, leftMargin=2.5*cm, rightMargin=2.5*cm)
     story = []
     base = getSampleStyleSheet()
-
-    t_style = ParagraphStyle('T', fontSize=20, textColor=colors.HexColor('#1a5276'),
-                             spaceAfter=6, alignment=1, fontName='Helvetica-Bold')
-    m_style = ParagraphStyle('M', fontSize=9, textColor=colors.HexColor('#888888'),
-                             spaceAfter=16, alignment=1)
-    h_style = ParagraphStyle('H', fontSize=13, textColor=colors.HexColor('#2874a6'),
-                             spaceAfter=8, spaceBefore=14, fontName='Helvetica-Bold')
-    b_style = ParagraphStyle('B', fontSize=11, spaceAfter=8, leading=18, alignment=4)
-
-    story.append(Paragraph(title, t_style))
-    story.append(Paragraph(f"{doc_type.upper()} | {style} uslubi | {datetime.now().strftime('%d.%m.%Y')}", m_style))
+    t_s = ParagraphStyle('T', fontSize=20, textColor=colors.HexColor('#1a5276'), spaceAfter=6, alignment=1, fontName='Helvetica-Bold')
+    m_s = ParagraphStyle('M', fontSize=9, textColor=colors.HexColor('#888888'), spaceAfter=16, alignment=1)
+    h_s = ParagraphStyle('H', fontSize=13, textColor=colors.HexColor('#2874a6'), spaceAfter=8, spaceBefore=14, fontName='Helvetica-Bold')
+    b_s = ParagraphStyle('B', fontSize=11, spaceAfter=8, leading=18, alignment=4)
+    story.append(Paragraph(title, t_s))
+    story.append(Paragraph(f"{doc_type.upper()} | {style} | {datetime.now().strftime('%d.%m.%Y')}", m_s))
     story.append(HRFlowable(width="100%", thickness=2, color=colors.HexColor('#2874a6')))
     story.append(Spacer(1, 0.3*cm))
-
     for line in content.split('\n'):
         line = line.strip()
         if not line:
             story.append(Spacer(1, 0.15*cm))
         elif line.isupper() and len(line) < 60:
-            story.append(Spacer(1, 0.2*cm))
-            story.append(Paragraph(line, h_style))
-        elif line[0].isdigit() and '. ' in line[:5]:
-            story.append(Paragraph(f"<b>{line}</b>", h_style))
+            story.append(Paragraph(line, h_s))
+        elif len(line) > 2 and line[0].isdigit() and '.' in line[:3]:
+            story.append(Paragraph(f"<b>{line}</b>", h_s))
         else:
-            story.append(Paragraph(line, b_style))
-
+            story.append(Paragraph(line, b_s))
     doc.build(story)
     buffer.seek(0)
     return buffer
@@ -507,7 +636,7 @@ def create_docx(title, content, style, doc_type):
     r.font.color.rgb = RGBColor(26, 82, 118)
     m = doc.add_paragraph()
     m.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    mr = m.add_run(f"{doc_type.upper()} | {style} uslubi | {datetime.now().strftime('%d.%m.%Y')}")
+    mr = m.add_run(f"{doc_type.upper()} | {style} | {datetime.now().strftime('%d.%m.%Y')}")
     mr.font.size = Pt(9)
     doc.add_paragraph()
     for line in content.split('\n'):
@@ -521,7 +650,7 @@ def create_docx(title, content, style, doc_type):
             hr.font.size = Pt(13)
             hr.font.bold = True
             hr.font.color.rgb = RGBColor(26, 82, 118)
-        elif line[0].isdigit() and '. ' in line[:5]:
+        elif len(line) > 2 and line[0].isdigit() and '.' in line[:3]:
             h = doc.add_paragraph()
             hr = h.add_run(line)
             hr.font.size = Pt(12)
@@ -535,7 +664,13 @@ def create_docx(title, content, style, doc_type):
     buffer.seek(0)
     return buffer
 
-# ===================== BOT HANDLERS =====================
+# ===================== BOT =====================
+
+THEME_NAMES = [
+    "🔵 Ko'k Premium", "🟢 Yashil Natura", "🟣 Binafsha Royal",
+    "🔴 Qizil Dinamik", "🩵 Moviy Ocean", "🟡 Oltin Biznes",
+    "⚫ Qora Elegant", "🟤 Jigarrang", "🌊 Dengiz", "🌿 Nefrit"
+]
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -553,11 +688,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🎓 Assalomu alaykum, *{name}*!\n\n"
         "Faqat *mavzuni* yozing — qolganini bot o'zi qiladi!\n\n"
-        "✨ *Yangi xususiyatlar:*\n"
-        "🖼 Rasmli slaydlar\n"
-        "🎨 10 ta zamonaviy dizayn\n"
-        "🤖 AI mazmun generatsiyasi\n"
-        "📄 PDF + DOCX + PPTX\n\n"
+        "✨ *Xususiyatlar:*\n"
+        "🎨 Google Slides — professional dizayn\n"
+        "🤖 AI — real ma'lumotlar\n"
+        "📄 PDF + DOCX + PPTX\n"
+        "🎯 10 ta rang tanlash\n\n"
         "💡 Birinchi hujjat *TEKIN!*",
         reply_markup=InlineKeyboardMarkup(kb),
         parse_mode=ParseMode.MARKDOWN
@@ -597,15 +732,13 @@ async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("10 ta", callback_data="slides_10"),
              InlineKeyboardButton("15 ta", callback_data="slides_15")]
         ]
-        await q.edit_message_text("🎯 *Nechta slayd bo'lsin?*",
-                                  reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+        await q.edit_message_text("🎯 *Nechta slayd?*", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
     else:
         kb = [
             [InlineKeyboardButton("📄 PDF", callback_data="fmt_pdf"),
              InlineKeyboardButton("📋 DOCX", callback_data="fmt_docx")]
         ]
-        await q.edit_message_text("📄 *Format tanlang:*",
-                                  reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+        await q.edit_message_text("📄 *Format tanlang:*", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 async def cb_slides(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -617,21 +750,19 @@ async def cb_slides(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data_store[uid]["slide_count"] = count
     user_data_store[uid]["format"] = "pptx"
     kb = [
-        [InlineKeyboardButton("🔵 Ko'k Premium", callback_data="theme_0"),
-         InlineKeyboardButton("🟢 Yashil", callback_data="theme_1")],
-        [InlineKeyboardButton("🟣 Binafsha", callback_data="theme_2"),
-         InlineKeyboardButton("🔴 Qizil", callback_data="theme_3")],
-        [InlineKeyboardButton("🩵 Moviy", callback_data="theme_4"),
+        [InlineKeyboardButton("🔵 Ko'k", callback_data="theme_0"),
+         InlineKeyboardButton("🟢 Yashil", callback_data="theme_1"),
+         InlineKeyboardButton("🟣 Binafsha", callback_data="theme_2")],
+        [InlineKeyboardButton("🔴 Qizil", callback_data="theme_3"),
+         InlineKeyboardButton("🩵 Moviy", callback_data="theme_4"),
          InlineKeyboardButton("🟡 Oltin", callback_data="theme_5")],
         [InlineKeyboardButton("⚫ Qora", callback_data="theme_6"),
-         InlineKeyboardButton("🟤 Jigarrang", callback_data="theme_7")],
-        [InlineKeyboardButton("🌊 Dengiz", callback_data="theme_8"),
-         InlineKeyboardButton("🌿 Nefrit", callback_data="theme_9")]
+         InlineKeyboardButton("🟤 Jigarrang", callback_data="theme_7"),
+         InlineKeyboardButton("🌊 Dengiz", callback_data="theme_8")],
+        [InlineKeyboardButton("🌿 Nefrit", callback_data="theme_9")]
     ]
-    await q.edit_message_text(
-        f"✅ *{count} ta slayd* tanlandi\n\n🎨 *10 ta dizayndan birini tanlang:*",
-        reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN
-    )
+    await q.edit_message_text(f"✅ *{count} ta slayd*\n\n🎨 *Rang tanlang:*",
+                              reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 async def cb_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -641,9 +772,8 @@ async def cb_theme(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in user_data_store:
         user_data_store[uid] = {}
     user_data_store[uid]["theme"] = tidx
-    theme_name = THEMES[tidx]["name"]
     await q.edit_message_text(
-        f"✅ *{theme_name}* tanlandi\n\n✏️ *Mavzuni yozing:*\n\n_Misol: \"Sun'iy intellekt va ta'lim\"_",
+        f"✅ *{THEME_NAMES[tidx]}* tanlandi\n\n✏️ *Mavzuni yozing:*\n\n_Misol: \"Sun'iy intellekt\"_",
         parse_mode=ParseMode.MARKDOWN
     )
     context.user_data[uid] = {"state": "title"}
@@ -656,10 +786,7 @@ async def cb_fmt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in user_data_store:
         user_data_store[uid] = {}
     user_data_store[uid]["format"] = fmt
-    await q.edit_message_text(
-        "✏️ *Mavzuni yozing:*\n\n_Misol: \"Kimyo va IT\"_",
-        parse_mode=ParseMode.MARKDOWN
-    )
+    await q.edit_message_text("✏️ *Mavzuni yozing:*\n\n_Misol: \"Kimyo va IT\"_", parse_mode=ParseMode.MARKDOWN)
     context.user_data[uid] = {"state": "title"}
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -672,9 +799,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data[uid]["state"] = None
         await update.message.reply_text(
             f"✅ Mavzu: *{text}*\n\n"
-            "⏳ Hujjat tayyorlanmoqda...\n"
-            "🤖 AI mazmun yozmoqda...\n"
-            "🖼 Rasmlar yuklanmoqda...\n"
+            "⏳ Tayyorlanmoqda...\n"
+            "🤖 AI yozmoqda...\n"
+            "🎨 Google Slides dizayn qilmoqda...\n"
             "_(1-2 daqiqa kuting)_",
             parse_mode=ParseMode.MARKDOWN
         )
@@ -684,8 +811,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("📝 Referat", callback_data="doc_referat"),
              InlineKeyboardButton("🎯 Slide", callback_data="doc_slide")]
         ]
-        await update.message.reply_text("📋 Avval hujjat turini tanlang:",
-                                        reply_markup=InlineKeyboardMarkup(kb))
+        await update.message.reply_text("📋 Avval hujjat turini tanlang:", reply_markup=InlineKeyboardMarkup(kb))
 
 async def do_generate(update, context, uid):
     try:
@@ -698,27 +824,50 @@ async def do_generate(update, context, uid):
         theme = d.get("theme", 0)
 
         if fmt == "pptx":
-            content = await generate_slide_content(title, scount, style)
-            buf = await create_pptx_with_images(title, content, style, scount, theme, title)
+            slides_list = await generate_slides(title, scount, style)
+            buf = await create_google_slides(title, slides_list, theme, style)
+            if not buf:
+                # Fallback to simple PPTX
+                from pptx import Presentation
+                from pptx.util import Inches, Pt as PPt2
+                from pptx.dml.color import RGBColor as PRGB2
+                prs = Presentation()
+                for st, sc in slides_list:
+                    slide = prs.slides.add_slide(prs.slide_layouts[6])
+                    tb = slide.shapes.add_textbox(Inches(0.5), Inches(0.5), Inches(9), Inches(1.5))
+                    tf = tb.text_frame
+                    p = tf.paragraphs[0]
+                    p.text = st
+                    p.font.size = PPt2(28)
+                    p.font.bold = True
+                    tb2 = slide.shapes.add_textbox(Inches(0.5), Inches(2), Inches(9), Inches(4))
+                    tf2 = tb2.text_frame
+                    tf2.word_wrap = True
+                    p2 = tf2.paragraphs[0]
+                    p2.text = sc
+                    p2.font.size = PPt2(16)
+                buf = BytesIO()
+                prs.save(buf)
+                buf.seek(0)
             fname = f"{title[:25].replace(' ','_')}.pptx"
         elif fmt == "docx":
-            content = await generate_doc_content(title, dtype, style)
+            content = await generate_doc(title, dtype, style)
             buf = create_docx(title, content, style, dtype)
             fname = f"{title[:25].replace(' ','_')}.docx"
         else:
-            content = await generate_doc_content(title, dtype, style)
+            content = await generate_doc(title, dtype, style)
             buf = create_pdf(title, content, style, dtype)
             fname = f"{title[:25].replace(' ','_')}.pdf"
 
         await context.bot.send_document(chat_id=uid, document=buf, filename=fname)
         user_data_store[uid]["documents"] = user_data_store[uid].get("documents", 0) + 1
         kb = [
-            [InlineKeyboardButton("📝 Yangi Hujjat", callback_data="new_doc")],
-            [InlineKeyboardButton("🏠 Bosh Menyu", callback_data="start")]
+            [InlineKeyboardButton("📝 Yangi", callback_data="new_doc")],
+            [InlineKeyboardButton("🏠 Menyu", callback_data="start")]
         ]
         await context.bot.send_message(
             chat_id=uid,
-            text=f"✅ *{fname}* yuborildi!\n\n📝 {dtype} | 📋 {style} | 📄 {fmt.upper()}",
+            text=f"✅ *{fname}* tayyor!\n📝 {dtype} | 📋 {style} | 📄 {fmt.upper()}",
             reply_markup=InlineKeyboardMarkup(kb),
             parse_mode=ParseMode.MARKDOWN
         )
@@ -730,10 +879,9 @@ async def cb_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     uid = q.from_user.id
     info = user_data_store.get(uid, {})
-    kb = [[InlineKeyboardButton("🏠 Bosh Menyu", callback_data="start")]]
+    kb = [[InlineKeyboardButton("🏠 Menyu", callback_data="start")]]
     await q.edit_message_text(
-        f"📊 *Statistika*\n\n👤 {info.get('name','N/A')}\n"
-        f"📄 Hujjatlar: {info.get('documents',0)}\n🆔 {uid}",
+        f"📊 *Statistika*\n\n👤 {info.get('name','N/A')}\n📄 {info.get('documents',0)} ta hujjat\n🆔 {uid}",
         reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN
     )
 
@@ -745,11 +893,10 @@ async def cb_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📖 *Qo'llanma*\n\n"
         "1️⃣ Hujjat turini tanlang\n"
         "2️⃣ Uslubni tanlang\n"
-        "3️⃣ Slayd soni tanlang\n"
-        "4️⃣ Dizayn rangini tanlang\n"
+        "3️⃣ Slayd sonini tanlang\n"
+        "4️⃣ Rangni tanlang\n"
         "5️⃣ Faqat *mavzuni* yozing\n"
-        "6️⃣ Bot o'zi yozib, rasmli PPTX tayyorlaydi! ✅\n\n"
-        "⚡ 1-2 daqiqada tayyor!",
+        "6️⃣ Google Slides professional PPTX tayyor! ✅",
         reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN
     )
 
@@ -792,9 +939,7 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_start, pattern="^start$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     print("✅ BOT ISHGA TUSHDI!")
-    print("🖼 RASMLI SLAYDLAR ACTIVE!")
-    print("🎨 10 TA DIZAYN MAVJUD!")
-    print("🤖 AI CONTENT ACTIVE!")
+    print("🎨 GOOGLE SLIDES API ACTIVE!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
